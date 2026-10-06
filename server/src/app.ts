@@ -1,13 +1,14 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import { env } from "./config/index.js";
 
 export const app: Express = express();
 
 // Core Middleware
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: env.CLIENT_URL,
     credentials: true,
   })
 );
@@ -41,7 +42,7 @@ app.use((_req: Request, res: Response) => {
 
 // Centralized Error Handling Middleware
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  const isDev = process.env.NODE_ENV !== "production";
+  const isDev = env.NODE_ENV !== "production";
   res.status(500).json({
     success: false,
     error: {
