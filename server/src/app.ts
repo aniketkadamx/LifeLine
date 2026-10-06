@@ -1,7 +1,7 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import { env } from "./config/index.js";
+import { env, getDatabaseState } from "./config/index.js";
 
 export const app: Express = express();
 
@@ -18,11 +18,13 @@ app.use(cookieParser());
 
 // Base Health Check Endpoint (System Verification)
 app.get("/api/health", (_req: Request, res: Response) => {
+  const dbState = getDatabaseState();
   res.status(200).json({
     success: true,
     data: {
       status: "operational",
       service: "LifeLine API",
+      database: dbState.status,
       timestamp: new Date().toISOString(),
     },
     message: "LifeLine backend service is running",
