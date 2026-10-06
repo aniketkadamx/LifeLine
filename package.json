@@ -1,0 +1,16 @@
+{
+  "name": "lifeline-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LifeLine — Digital Healthcare & Telemedicine Platform",
+  "scripts": {
+    "dev:client": "npm run dev --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "build:client": "npm run build --prefix client",
+    "build:server": "npm run build --prefix server",
+    "build": "npm run build:server && npm run build:client",
+    "test:client": "npm run test --prefix client",
+    "test:server": "npm run test --prefix server",
+    "test": "npm run test:server && npm run test:client"
+  }
+}
