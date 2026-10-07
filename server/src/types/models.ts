@@ -401,3 +401,379 @@ export interface IPrescription {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * Common pharmaceutical dosage forms.
+ * Source: docs/api/API_CONTRACT.md Group 10.
+ */
+export enum DosageForm {
+  TABLET = "TABLET",
+  CAPSULE = "CAPSULE",
+  SYRUP = "SYRUP",
+  INJECTION = "INJECTION",
+  OINTMENT = "OINTMENT",
+  DROPS = "DROPS",
+  INHALER = "INHALER",
+  POWDER = "POWDER",
+  OTHER = "OTHER",
+}
+
+/**
+ * Medicine Order lifecycle state machine.
+ * Source: docs/api/STATE_MACHINES.md Section 4.1.
+ */
+export enum OrderStatus {
+  PLACED = "PLACED",
+  PRESCRIPTION_REVIEW = "PRESCRIPTION_REVIEW",
+  PHARMACY_ACCEPTED = "PHARMACY_ACCEPTED",
+  PREPARING = "PREPARING",
+  READY_FOR_DELIVERY = "READY_FOR_DELIVERY",
+  OUT_FOR_DELIVERY = "OUT_FOR_DELIVERY",
+  DELIVERED = "DELIVERED",
+  CANCELLED = "CANCELLED",
+  REJECTED = "REJECTED",
+  FAILED = "FAILED",
+  RETURNED = "RETURNED",
+}
+
+/**
+ * Payment transaction lifecycle state machine.
+ * Source: docs/api/STATE_MACHINES.md Section 5.1.
+ */
+export enum PaymentStatus {
+  CREATED = "CREATED",
+  PENDING_GATEWAY = "PENDING_GATEWAY",
+  PROCESSING = "PROCESSING",
+  SUCCESS = "SUCCESS",
+  FAILED = "FAILED",
+  EXPIRED = "EXPIRED",
+  REFUND_PENDING = "REFUND_PENDING",
+  REFUNDED = "REFUNDED",
+}
+
+/**
+ * Payment payable target entity type.
+ * Source: docs/api/API_CONTRACT.md Group 13.1.
+ */
+export enum PaymentTargetType {
+  APPOINTMENT = "APPOINTMENT",
+  ORDER = "ORDER",
+}
+
+/**
+ * Payment gateway provider.
+ * Source: docs/api/API_CONTRACT.md Group 13.1, PROJECT_CONTEXT.md.
+ */
+export enum PaymentProvider {
+  RAZORPAY = "RAZORPAY",
+  STRIPE = "STRIPE",
+}
+
+/**
+ * Security and clinical audited actions.
+ * Source: docs/api/AUTHORIZATION_MATRIX.md Section 6.2.
+ */
+export enum AuditAction {
+  DOCTOR_VERIFICATION_APPROVED = "DOCTOR_VERIFICATION_APPROVED",
+  DOCTOR_VERIFICATION_REJECTED = "DOCTOR_VERIFICATION_REJECTED",
+  PHARMACY_VERIFICATION_APPROVED = "PHARMACY_VERIFICATION_APPROVED",
+  PHARMACY_VERIFICATION_REJECTED = "PHARMACY_VERIFICATION_REJECTED",
+  USER_ACCOUNT_SUSPENDED = "USER_ACCOUNT_SUSPENDED",
+  USER_ACCOUNT_REINSTATED = "USER_ACCOUNT_REINSTATED",
+  MEDICAL_RECORD_VIEWED = "MEDICAL_RECORD_VIEWED",
+  MEDICAL_RECORD_DOWNLOADED = "MEDICAL_RECORD_DOWNLOADED",
+  PRESCRIPTION_ISSUED = "PRESCRIPTION_ISSUED",
+  PRESCRIPTION_REVOKED = "PRESCRIPTION_REVOKED",
+  ORDER_PRESCRIPTION_VERIFIED = "ORDER_PRESCRIPTION_VERIFIED",
+  ORDER_PRESCRIPTION_REJECTED = "ORDER_PRESCRIPTION_REJECTED",
+  PAYMENT_REFUND_ISSUED = "PAYMENT_REFUND_ISSUED",
+  APPOINTMENT_CANCELLED_BY_DOCTOR = "APPOINTMENT_CANCELLED_BY_DOCTOR",
+  CLINICAL_NOTE_MODIFIED = "CLINICAL_NOTE_MODIFIED",
+  OTHER = "OTHER",
+}
+
+/**
+ * System notification categories.
+ * Source: docs/api/API_CONTRACT.md Group 14, docs/api/STATE_MACHINES.md.
+ */
+export enum NotificationType {
+  APPOINTMENT_CONFIRMED = "APPOINTMENT_CONFIRMED",
+  APPOINTMENT_CANCELLED = "APPOINTMENT_CANCELLED",
+  APPOINTMENT_RESCHEDULED = "APPOINTMENT_RESCHEDULED",
+  APPOINTMENT_REMINDER = "APPOINTMENT_REMINDER",
+  CONSULTATION_ROOM_OPENED = "CONSULTATION_ROOM_OPENED",
+  PRESCRIPTION_ISSUED = "PRESCRIPTION_ISSUED",
+  PRESCRIPTION_REVOKED = "PRESCRIPTION_REVOKED",
+  ORDER_PLACED = "ORDER_PLACED",
+  ORDER_ACCEPTED = "ORDER_ACCEPTED",
+  ORDER_STATUS_UPDATED = "ORDER_STATUS_UPDATED",
+  ORDER_DELIVERED = "ORDER_DELIVERED",
+  ORDER_CANCELLED = "ORDER_CANCELLED",
+  PAYMENT_SUCCESS = "PAYMENT_SUCCESS",
+  PAYMENT_FAILED = "PAYMENT_FAILED",
+  REFUND_PROCESSED = "REFUND_PROCESSED",
+  DOCTOR_VERIFIED = "DOCTOR_VERIFIED",
+  DOCTOR_REJECTED = "DOCTOR_REJECTED",
+  PHARMACY_VERIFIED = "PHARMACY_VERIFIED",
+  PHARMACY_REJECTED = "PHARMACY_REJECTED",
+  NEW_MESSAGE = "NEW_MESSAGE",
+  SYSTEM_ALERT = "SYSTEM_ALERT",
+}
+
+/**
+ * Review moderation status.
+ * Source: docs/api/API_CONTRACT.md Group 16.
+ */
+export enum ReviewStatus {
+  PUBLISHED = "PUBLISHED",
+  HIDDEN = "HIDDEN",
+  UNDER_REVIEW = "UNDER_REVIEW",
+}
+
+/**
+ * User complaint and dispute categories.
+ * Source: docs/api/API_CONTRACT.md Group 17.1.
+ */
+export enum ComplaintCategory {
+  APPOINTMENT = "APPOINTMENT",
+  DOCTOR_CONDUCT = "DOCTOR_CONDUCT",
+  MEDICINE_QUALITY = "MEDICINE_QUALITY",
+  DELIVERY = "DELIVERY",
+  PAYMENT = "PAYMENT",
+  OTHER = "OTHER",
+}
+
+/**
+ * Complaint lifecycle resolution states.
+ * Source: docs/api/API_CONTRACT.md Group 17.
+ */
+export enum ComplaintStatus {
+  OPEN = "OPEN",
+  UNDER_REVIEW = "UNDER_REVIEW",
+  RESOLVED = "RESOLVED",
+  REJECTED = "REJECTED",
+}
+
+/**
+ * Complaint triage priority levels.
+ * Source: docs/api/API_CONTRACT.md Group 17.
+ */
+export enum ComplaintPriority {
+  LOW = "LOW",
+  MEDIUM = "MEDIUM",
+  HIGH = "HIGH",
+  URGENT = "URGENT",
+}
+
+/**
+ * Master catalog Medicine document interface.
+ */
+export interface IMedicine {
+  _id: Types.ObjectId;
+  id?: string;
+  name: string;
+  genericName: string;
+  brandName?: string;
+  manufacturer: string;
+  dosageForm: DosageForm;
+  strength?: string;
+  category?: string;
+  description?: string;
+  prescriptionRequired: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Pharmacy Inventory document interface.
+ */
+export interface IInventory {
+  _id: Types.ObjectId;
+  id?: string;
+  pharmacyId: Types.ObjectId;
+  medicineId: Types.ObjectId;
+  quantity: number;
+  reservedQuantity: number;
+  price: number;
+  batchNumber?: string;
+  expiryDate?: Date;
+  isAvailable: boolean;
+  lowStockThreshold: number;
+  reorderQuantity?: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Historical snapshot item of a purchased medication in an Order.
+ */
+export interface IOrderItemSnapshot {
+  medicineId: Types.ObjectId;
+  medicineName: string;
+  dosageForm?: string;
+  strength?: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+/**
+ * Monetary breakdown totals for an Order.
+ */
+export interface IOrderTotals {
+  subtotal: number;
+  deliveryFee: number;
+  totalAmount: number;
+}
+
+/**
+ * Pharmacist review decision for prescription-bearing orders.
+ */
+export interface IOrderPrescriptionReview {
+  reviewedBy?: Types.ObjectId;
+  reviewedAt?: Date;
+  decision?: "APPROVE" | "REJECT";
+  rejectionReason?: string;
+}
+
+/**
+ * Medicine Order document interface.
+ */
+export interface IOrder {
+  _id: Types.ObjectId;
+  id?: string;
+  patientId: Types.ObjectId;
+  pharmacyId: Types.ObjectId;
+  items: IOrderItemSnapshot[];
+  prescriptionId?: Types.ObjectId;
+  paymentId?: Types.ObjectId | string;
+  paymentStatus: "UNPAID" | "PENDING" | "PAID" | "REFUNDED";
+  status: OrderStatus;
+  deliveryAddress: IAddress;
+  totals: IOrderTotals;
+  currency: string;
+  deliveryOtp?: string; // Private verification code
+  deliveryNotes?: string;
+  prescriptionReview?: IOrderPrescriptionReview;
+  cancelledAt?: Date;
+  cancellationReason?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Payment transaction document interface.
+ */
+export interface IPayment {
+  _id: Types.ObjectId;
+  id?: string;
+  userId: Types.ObjectId;
+  targetType: PaymentTargetType;
+  targetId: Types.ObjectId;
+  amount: number;
+  currency: string;
+  status: PaymentStatus;
+  provider: PaymentProvider;
+  referenceId: string;
+  providerOrderId?: string;
+  providerPaymentId?: string;
+  providerSignature?: string; // Private
+  failureCode?: string;
+  failureReason?: string;
+  refundId?: string;
+  refundAmount?: number;
+  refundReason?: string;
+  refundStatus?: string;
+  refundedAt?: Date;
+  gatewayMetadata?: Record<string, unknown>; // Private
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Security and operational audit log record interface.
+ */
+export interface IAuditLog {
+  _id: Types.ObjectId;
+  id?: string;
+  actorId: Types.ObjectId;
+  actorRole: "PATIENT" | "DOCTOR" | "PHARMACY" | "ADMIN" | "SYSTEM";
+  action: AuditAction | string;
+  resourceType: string;
+  resourceId: string;
+  patientId?: Types.ObjectId;
+  ipAddress?: string;
+  userAgent?: string;
+  metadata?: Record<string, unknown>; // Private
+  status: "SUCCESS" | "FAILURE";
+  createdAt: Date;
+}
+
+/**
+ * User application notification document interface.
+ */
+export interface INotification {
+  _id: Types.ObjectId;
+  id?: string;
+  userId: Types.ObjectId;
+  type: NotificationType;
+  title: string;
+  message: string;
+  isRead: boolean;
+  readAt?: Date;
+  relatedEntityType?: string;
+  relatedEntityId?: Types.ObjectId;
+  channels: string[];
+  metadata?: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Review document interface.
+ */
+export interface IReview {
+  _id: Types.ObjectId;
+  id?: string;
+  patientId: Types.ObjectId;
+  doctorId?: Types.ObjectId;
+  pharmacyId?: Types.ObjectId;
+  appointmentId?: Types.ObjectId;
+  orderId?: Types.ObjectId;
+  rating: number;
+  comment: string;
+  status: ReviewStatus;
+  moderationReason?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Complaint resolution information.
+ */
+export interface IComplaintResolution {
+  resolvedBy?: Types.ObjectId;
+  resolvedAt?: Date;
+  resolutionNotes?: string;
+}
+
+/**
+ * Platform complaint and dispute document interface.
+ */
+export interface IComplaint {
+  _id: Types.ObjectId;
+  id?: string;
+  complainantId: Types.ObjectId;
+  category: ComplaintCategory;
+  subject: string;
+  description: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  status: ComplaintStatus;
+  priority: ComplaintPriority;
+  assignedTo?: Types.ObjectId;
+  resolution?: IComplaintResolution;
+  createdAt: Date;
+  updatedAt: Date;
+}

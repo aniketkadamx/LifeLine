@@ -10,6 +10,16 @@ export { Consultation } from "./consultation.model.js";
 export { MedicalRecord } from "./medical-record.model.js";
 export { Prescription } from "./prescription.model.js";
 
+// Commerce & Operational Models
+export { Medicine } from "./medicine.model.js";
+export { Inventory } from "./inventory.model.js";
+export { Order } from "./order.model.js";
+export { Payment } from "./payment.model.js";
+export { AuditLog } from "./audit-log.model.js";
+export { Notification } from "./notification.model.js";
+export { Review } from "./review.model.js";
+export { Complaint } from "./complaint.model.js";
+
 // Plugins
 export { toJSONPlugin } from "./plugins/index.js";
 
@@ -27,6 +37,17 @@ export {
   MedicalRecordType,
   PrescriptionStatus,
   MedicineRoute,
+  DosageForm,
+  OrderStatus,
+  PaymentStatus,
+  PaymentTargetType,
+  PaymentProvider,
+  AuditAction,
+  NotificationType,
+  ReviewStatus,
+  ComplaintCategory,
+  ComplaintStatus,
+  ComplaintPriority,
   type IUser,
   type IPatientProfile,
   type IDoctorProfile,
@@ -40,4 +61,17 @@ export {
   type IAddress,
   type IEmergencyContact,
   type IVerificationDocument,
+  type IMedicine,
+  type IInventory,
+  type IOrderItemSnapshot,
+  type IOrderTotals,
+  type IOrderPrescriptionReview,
+  type IOrder,
+  type IPayment,
+  type IAuditLog,
+  type INotification,
+  type IReview,
+  type IComplaintResolution,
+  type IComplaint,
 } from "../types/models.js";
+
