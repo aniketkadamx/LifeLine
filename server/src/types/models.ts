@@ -82,6 +82,73 @@ export enum ConsultationType {
 }
 
 /**
+ * Appointment lifecycle state machine.
+ * Source: docs/api/STATE_MACHINES.md Section 1.1.
+ */
+export enum AppointmentStatus {
+  PENDING_PAYMENT = "PENDING_PAYMENT",
+  CONFIRMED = "CONFIRMED",
+  IN_PROGRESS = "IN_PROGRESS",
+  COMPLETED = "COMPLETED",
+  CANCELLED = "CANCELLED",
+  REJECTED = "REJECTED",
+  RESCHEDULED = "RESCHEDULED",
+  NO_SHOW = "NO_SHOW",
+}
+
+/**
+ * Virtual consultation lifecycle state machine.
+ * Source: docs/api/STATE_MACHINES.md Section 2.1.
+ */
+export enum ConsultationStatus {
+  SCHEDULED = "SCHEDULED",
+  ROOM_OPENED = "ROOM_OPENED",
+  IN_CONSULTATION = "IN_CONSULTATION",
+  PAUSED = "PAUSED",
+  ENDED = "ENDED",
+  COMPLETED = "COMPLETED",
+}
+
+/**
+ * Clinical document category classification.
+ * Source: PROJECT_CONTEXT.md Section 36, docs/api/API_CONTRACT.md Section 8.2.
+ */
+export enum MedicalRecordType {
+  LAB_REPORT = "LAB_REPORT",
+  PRESCRIPTION = "PRESCRIPTION",
+  XRAY = "XRAY",
+  MRI = "MRI",
+  CT_SCAN = "CT_SCAN",
+  DIAGNOSIS_DOCUMENT = "DIAGNOSIS_DOCUMENT",
+  OTHER = "OTHER",
+}
+
+/**
+ * Digital prescription lifecycle state machine.
+ * Source: docs/api/STATE_MACHINES.md Section 3.1.
+ */
+export enum PrescriptionStatus {
+  DRAFT = "DRAFT",
+  FINALIZED_ISSUED = "FINALIZED_ISSUED",
+  FULFILLED_PARTIAL = "FULFILLED_PARTIAL",
+  FULFILLED_COMPLETE = "FULFILLED_COMPLETE",
+  EXPIRED = "EXPIRED",
+  REVOKED = "REVOKED",
+}
+
+/**
+ * Prescribed medication route of administration.
+ * Source: docs/api/API_CONTRACT.md Section 9.1.
+ */
+export enum MedicineRoute {
+  ORAL = "ORAL",
+  TOPICAL = "TOPICAL",
+  INJECTION = "INJECTION",
+  DROPS = "DROPS",
+  INHALATION = "INHALATION",
+}
+
+/**
  * Common address schema interface.
  */
 export interface IAddress {
@@ -209,6 +276,128 @@ export interface IPharmacyProfile {
   serviceArea: string[];
   rating: number;
   totalReviews: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Cancellation audit details for appointments.
+ */
+export interface IAppointmentCancellation {
+  reason: string;
+  cancelledBy?: Types.ObjectId;
+  cancelledAt: Date;
+}
+
+/**
+ * Appointment document interface.
+ */
+export interface IAppointment {
+  _id: Types.ObjectId;
+  id?: string;
+  patientId: Types.ObjectId;
+  doctorId: Types.ObjectId;
+  appointmentType: ConsultationType;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  status: AppointmentStatus;
+  reason: string;
+  fee: number;
+  currency: string;
+  paymentId?: Types.ObjectId | string;
+  paymentStatus?: "UNPAID" | "PENDING" | "PAID" | "REFUNDED";
+  lockExpiresAt?: Date; // 15-minute reservation lock expiration
+  consultationId?: Types.ObjectId;
+  cancellation?: IAppointmentCancellation;
+  rescheduledFrom?: Types.ObjectId;
+  rescheduledTo?: Types.ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Consultation document interface.
+ */
+export interface IConsultation {
+  _id: Types.ObjectId;
+  id?: string;
+  appointmentId: Types.ObjectId;
+  patientId: Types.ObjectId;
+  doctorId: Types.ObjectId;
+  consultationType: ConsultationType;
+  status: ConsultationStatus;
+  roomId: string;
+  startedAt?: Date;
+  endedAt?: Date;
+  pausedAt?: Date;
+  pauseGraceExpiresAt?: Date;
+  durationSeconds?: number;
+  diagnosis?: string;
+  clinicalNotes?: string;
+  recommendedFollowUpDays?: number;
+  prescriptionId?: Types.ObjectId;
+  providerSessionId?: string;
+  providerMetadata?: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * MedicalRecord document interface.
+ */
+export interface IMedicalRecord {
+  _id: Types.ObjectId;
+  id?: string;
+  patientId: Types.ObjectId;
+  uploadedBy: Types.ObjectId;
+  relatedAppointmentId?: Types.ObjectId;
+  relatedConsultationId?: Types.ObjectId;
+  title: string;
+  description?: string;
+  recordType: MedicalRecordType;
+  recordDate: Date;
+  storageKey: string; // Internal cloud storage key (private)
+  fileName: string;
+  fileType: string; // e.g. "application/pdf"
+  sizeBytes: number;
+  isArchived: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Historical snapshot item of a prescribed medication.
+ */
+export interface IPrescriptionMedicineItem {
+  medicineId: Types.ObjectId;
+  medicineName: string; // Historical catalog snapshot
+  dosage: string; // e.g. "500mg"
+  frequency: string; // e.g. "1-0-1 (After food)"
+  durationDays: number;
+  quantity: number;
+  route: MedicineRoute;
+  specialInstructions?: string;
+}
+
+/**
+ * Prescription document interface.
+ */
+export interface IPrescription {
+  _id: Types.ObjectId;
+  id?: string;
+  patientId: Types.ObjectId;
+  doctorId: Types.ObjectId;
+  appointmentId?: Types.ObjectId;
+  consultationId?: Types.ObjectId;
+  status: PrescriptionStatus;
+  diagnosis: string;
+  medicines: IPrescriptionMedicineItem[];
+  additionalNotes?: string;
+  issuedAt?: Date;
+  expiresAt: Date; // Standard 90-day validity window
+  revokedAt?: Date;
+  revokedBy?: Types.ObjectId;
+  revocationReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }
