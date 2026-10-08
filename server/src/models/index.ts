@@ -19,6 +19,7 @@ export { AuditLog } from "./audit-log.model.js";
 export { Notification } from "./notification.model.js";
 export { Review } from "./review.model.js";
 export { Complaint } from "./complaint.model.js";
+export { RefreshToken } from "./refresh-token.model.js";
 
 // Plugins
 export { toJSONPlugin } from "./plugins/index.js";
@@ -73,5 +74,6 @@ export {
   type IReview,
   type IComplaintResolution,
   type IComplaint,
+  type IRefreshToken,
 } from "../types/models.js";
 

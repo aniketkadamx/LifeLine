@@ -803,3 +803,21 @@ export interface IComplaint {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * Refresh token family tracking and reuse detection document interface.
+ * Source: docs/api/API_CONTRACT.md Section 1.5, MASTER_IMPLEMENTATION_ROADMAP.md Task 3.1.
+ */
+export interface IRefreshToken {
+  _id: Types.ObjectId;
+  id?: string;
+  userId: Types.ObjectId;
+  familyId: string;
+  jti: string;
+  tokenHash: string;
+  isRevoked: boolean;
+  expiresAt: Date;
+  replacedByJti?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}

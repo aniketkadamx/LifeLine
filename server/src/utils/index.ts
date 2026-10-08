@@ -9,3 +9,8 @@ export {
 } from "./api-response.js";
 
 export { AppError } from "./api-error.js";
+export {
+  hashPassword,
+  comparePassword,
+  BCRYPT_ROUNDS,
+} from "./password.js";
