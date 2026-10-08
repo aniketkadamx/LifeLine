@@ -1,19 +1,27 @@
 import express, { type Express, type Request, type Response } from "express";
-import cors from "cors";
 import cookieParser from "cookie-parser";
-import { env, getDatabaseState } from "./config/index.js";
+import { getDatabaseState } from "./config/index.js";
 import { sendSuccess } from "./utils/index.js";
-import { notFoundHandler, errorHandler } from "./middlewares/index.js";
+import {
+  helmetMiddleware,
+  corsMiddleware,
+  globalLimiter,
+  notFoundHandler,
+  errorHandler,
+} from "./middlewares/index.js";
 
 export const app: Express = express();
 
-// Core Middleware
-app.use(
-  cors({
-    origin: env.CLIENT_URL,
-    credentials: true,
-  })
-);
+// Security Headers (Earliest in pipeline)
+app.use(helmetMiddleware);
+
+// Cross-Origin Resource Sharing (CORS)
+app.use(corsMiddleware);
+
+// Global API Rate Limiter (100 req/min)
+app.use(globalLimiter);
+
+// Request Parsing Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
