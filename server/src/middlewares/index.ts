@@ -7,4 +7,6 @@ export {
   createRateLimiter,
   type RateLimiterOptions,
 } from "./rate-limiter.middleware.js";
+export { auditMiddleware, type AuditMiddlewareOptions } from "./audit.middleware.js";
+
 
