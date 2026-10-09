@@ -55,6 +55,10 @@ const userSchema = new Schema<IUser>(
     lastLoginAt: {
       type: Date,
     },
+    avatar: {
+      type: String,
+      trim: true,
+    },
     patientProfile: {
       type: Schema.Types.ObjectId,
       ref: "PatientProfile",

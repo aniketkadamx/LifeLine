@@ -8,5 +8,4 @@ export {
   type RateLimiterOptions,
 } from "./rate-limiter.middleware.js";
 export { auditMiddleware, type AuditMiddlewareOptions } from "./audit.middleware.js";
-
-
+export { authenticate } from "./auth.middleware.js";

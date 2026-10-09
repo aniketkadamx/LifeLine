@@ -193,6 +193,7 @@ export interface IUser {
   emailVerified: boolean;
   phoneVerified: boolean;
   lastLoginAt?: Date;
+  avatar?: string;
   patientProfile?: Types.ObjectId;
   doctorProfile?: Types.ObjectId;
   pharmacyProfile?: Types.ObjectId;
