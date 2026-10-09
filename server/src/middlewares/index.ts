@@ -9,3 +9,9 @@ export {
 } from "./rate-limiter.middleware.js";
 export { auditMiddleware, type AuditMiddlewareOptions } from "./audit.middleware.js";
 export { authenticate } from "./auth.middleware.js";
+export { authorizeRole } from "./role.middleware.js";
+export {
+  authorizeOwnership,
+  type ResourceFinder,
+  type OwnerField,
+} from "./ownership.middleware.js";
