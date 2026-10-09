@@ -13,3 +13,11 @@ export {
   type GenerateTokensOptions,
   type RotateTokenResult,
 } from "./token.service.js";
+
+export {
+  authService,
+  AuthService,
+  type RegisterResult,
+  type LoginResult,
+  type RefreshResult,
+} from "./auth.service.js";

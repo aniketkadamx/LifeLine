@@ -9,6 +9,7 @@ import {
   notFoundHandler,
   errorHandler,
 } from "./middlewares/index.js";
+import { apiV1Router } from "./routes/index.js";
 
 export const app: Express = express();
 
@@ -40,6 +41,9 @@ app.get("/api/health", (_req: Request, res: Response) => {
     "LifeLine backend service is running"
   );
 });
+
+// Mount API v1 Routers
+app.use("/api/v1", apiV1Router);
 
 // 404 Handler
 app.use(notFoundHandler);
