@@ -319,17 +319,25 @@ describe("Milestone 5 - Task 5.1: Public Doctor Directory Search & Filtering", (
       expect(res.body.data.every((d: any) => d.rating >= 4.5)).toBe(true);
     });
 
-    it("filters doctors by consultation fee boundaries (minFee and maxFee)", async () => {
+    it("filters doctors by maximum consultation fee (maxFee)", async () => {
       const res = await request(app)
-        .get("/api/v1/doctors?minFee=700&maxFee=1100")
+        .get("/api/v1/doctors?maxFee=1000")
         .set("X-Forwarded-For", getUniqueIp());
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toHaveLength(2); // Rajesh (800) and Anita (1000)
+      expect(res.body.data).toHaveLength(3); // Rajesh (800), Anita (1000), Vikram (600)
       for (const d of res.body.data) {
-        expect(d.consultationFee).toBeGreaterThanOrEqual(700);
-        expect(d.consultationFee).toBeLessThanOrEqual(1100);
+        expect(d.consultationFee).toBeLessThanOrEqual(1000);
       }
+
+      const resLower = await request(app)
+        .get("/api/v1/doctors?maxFee=700")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resLower.status).toBe(200);
+      expect(resLower.body.data).toHaveLength(1);
+      expect(resLower.body.data[0].name).toBe("Dr. Vikram Seth");
+      expect(resLower.body.data[0].consultationFee).toBe(600);
     });
 
     it("performs text search across doctor name and clinic name", async () => {
@@ -367,42 +375,73 @@ describe("Milestone 5 - Task 5.1: Public Doctor Directory Search & Filtering", (
   // =========================================================================
   describe("3. Pagination & Deterministic Sorting", () => {
     beforeEach(async () => {
-      for (let i = 1; i <= 15; i++) {
+      for (let i = 1; i <= 25; i++) {
         await createDoctorFixture({
           fullName: `Dr. Candidate ${String(i).padStart(2, "0")}`,
           specialization: "General Physician",
           consultationFee: 500 + i * 50,
-          rating: Number((3 + (i / 15) * 2).toFixed(1)),
+          rating: Number((3 + (i / 25) * 2).toFixed(1)),
           experienceYears: i,
         });
       }
     });
 
-    it("applies default pagination (page=1, limit=10)", async () => {
+    it("applies default pagination when limit is omitted (page=1, limit=20)", async () => {
       const res = await request(app)
         .get("/api/v1/doctors")
         .set("X-Forwarded-For", getUniqueIp());
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toHaveLength(10);
+      expect(res.body.data).toHaveLength(20);
       expect(res.body.meta.page).toBe(1);
-      expect(res.body.meta.limit).toBe(10);
-      expect(res.body.meta.total).toBe(15);
+      expect(res.body.meta.limit).toBe(20);
+      expect(res.body.meta.total).toBe(25);
       expect(res.body.meta.totalPages).toBe(2);
       expect(res.body.meta.hasNextPage).toBe(true);
       expect(res.body.meta.hasPrevPage).toBe(false);
     });
 
-    it("supports custom pagination parameters", async () => {
+    it("supports custom page with default limit (page=2, limit=20)", async () => {
       const res = await request(app)
-        .get("/api/v1/doctors?page=2&limit=10")
+        .get("/api/v1/doctors?page=2")
         .set("X-Forwarded-For", getUniqueIp());
 
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(5);
       expect(res.body.meta.page).toBe(2);
+      expect(res.body.meta.limit).toBe(20);
+      expect(res.body.meta.total).toBe(25);
+      expect(res.body.meta.totalPages).toBe(2);
       expect(res.body.meta.hasNextPage).toBe(false);
       expect(res.body.meta.hasPrevPage).toBe(true);
+    });
+
+    it("supports explicit valid limits (limit=5)", async () => {
+      const res = await request(app)
+        .get("/api/v1/doctors?page=1&limit=5")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(5);
+      expect(res.body.meta.page).toBe(1);
+      expect(res.body.meta.limit).toBe(5);
+      expect(res.body.meta.total).toBe(25);
+      expect(res.body.meta.totalPages).toBe(5);
+      expect(res.body.meta.hasNextPage).toBe(true);
+    });
+
+    it("supports maximum limit of 100", async () => {
+      const res = await request(app)
+        .get("/api/v1/doctors?limit=100")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(25);
+      expect(res.body.meta.page).toBe(1);
+      expect(res.body.meta.limit).toBe(100);
+      expect(res.body.meta.total).toBe(25);
+      expect(res.body.meta.totalPages).toBe(1);
+      expect(res.body.meta.hasNextPage).toBe(false);
     });
 
     it("supports sorting by consultationFee ascending", async () => {
@@ -433,9 +472,9 @@ describe("Milestone 5 - Task 5.1: Public Doctor Directory Search & Filtering", (
   // 4. Query Validation & Error Envelopes
   // =========================================================================
   describe("4. Query Validation & Error Taxonomies", () => {
-    it("returns 422 VALIDATION_ERROR when minFee exceeds maxFee", async () => {
+    it("returns 422 VALIDATION_ERROR when limit exceeds maximum allowed (limit=101)", async () => {
       const res = await request(app)
-        .get("/api/v1/doctors?minFee=1500&maxFee=500")
+        .get("/api/v1/doctors?limit=101")
         .set("X-Forwarded-For", getUniqueIp());
 
       expect(res.status).toBe(422);
@@ -443,7 +482,45 @@ describe("Milestone 5 - Task 5.1: Public Doctor Directory Search & Filtering", (
       expect(res.body.error.code).toBe("VALIDATION_ERROR");
     });
 
-    it("returns 422 VALIDATION_ERROR for negative experience or invalid rating", async () => {
+    it("returns 422 VALIDATION_ERROR when unknown query parameters or unapproved aliases are passed", async () => {
+      const resMinFee = await request(app)
+        .get("/api/v1/doctors?minFee=500")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resMinFee.status).toBe(422);
+      expect(resMinFee.body.success).toBe(false);
+      expect(resMinFee.body.error.code).toBe("VALIDATION_ERROR");
+
+      const resExp = await request(app)
+        .get("/api/v1/doctors?experience=5")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resExp.status).toBe(422);
+      expect(resExp.body.error.code).toBe("VALIDATION_ERROR");
+
+      const resRating = await request(app)
+        .get("/api/v1/doctors?rating=4")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resRating.status).toBe(422);
+      expect(resRating.body.error.code).toBe("VALIDATION_ERROR");
+
+      const resInjection = await request(app)
+        .get("/api/v1/doctors?unrecognizedField=injectionAttempt")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resInjection.status).toBe(422);
+      expect(resInjection.body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("returns 422 VALIDATION_ERROR for negative maxFee, negative minExperience or invalid minRating", async () => {
+      const resNegFee = await request(app)
+        .get("/api/v1/doctors?maxFee=-100")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resNegFee.status).toBe(422);
+      expect(resNegFee.body.error.code).toBe("VALIDATION_ERROR");
+
       const resNegExp = await request(app)
         .get("/api/v1/doctors?minExperience=-5")
         .set("X-Forwarded-For", getUniqueIp());
@@ -459,23 +536,30 @@ describe("Milestone 5 - Task 5.1: Public Doctor Directory Search & Filtering", (
       expect(resBadRating.body.error.code).toBe("VALIDATION_ERROR");
     });
 
-    it("returns 422 VALIDATION_ERROR when unknown/unexpected query fields are passed (strict schema)", async () => {
-      const res = await request(app)
-        .get("/api/v1/doctors?unrecognizedField=injectionAttempt")
-        .set("X-Forwarded-For", getUniqueIp());
-
-      expect(res.status).toBe(422);
-      expect(res.body.error.code).toBe("VALIDATION_ERROR");
-    });
-
-    it("returns 400 BAD_REQUEST for malformed doctor identifier in detail endpoint", async () => {
-      const res = await request(app)
+    it("returns 400 BAD_REQUEST for malformed doctor identifier in detail endpoint (non-hex, invalid length)", async () => {
+      const resNonHex = await request(app)
         .get("/api/v1/doctors/invalid-not-hex-id")
         .set("X-Forwarded-For", getUniqueIp());
 
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.error.code).toBe("BAD_REQUEST");
+      expect(resNonHex.status).toBe(400);
+      expect(resNonHex.body.success).toBe(false);
+      expect(resNonHex.body.error.code).toBe("BAD_REQUEST");
+
+      const resShort = await request(app)
+        .get("/api/v1/doctors/507f1f77bcf86cd79943901")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resShort.status).toBe(400);
+      expect(resShort.body.success).toBe(false);
+      expect(resShort.body.error.code).toBe("BAD_REQUEST");
+
+      const resLong = await request(app)
+        .get("/api/v1/doctors/507f1f77bcf86cd799439011aabb")
+        .set("X-Forwarded-For", getUniqueIp());
+
+      expect(resLong.status).toBe(400);
+      expect(resLong.body.success).toBe(false);
+      expect(resLong.body.error.code).toBe("BAD_REQUEST");
     });
 
     it("returns 404 DOCTOR_NOT_FOUND when valid ObjectId does not exist", async () => {

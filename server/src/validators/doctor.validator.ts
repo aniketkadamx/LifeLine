@@ -145,28 +145,14 @@ export const doctorSearchQuerySchema = z
       .int("minExperience must be an integer")
       .min(0, "minExperience cannot be negative")
       .optional(),
-    experience: z.coerce
-      .number({ invalid_type_error: "experience must be a number" })
-      .int("experience must be an integer")
-      .min(0, "experience cannot be negative")
+    maxFee: z.coerce
+      .number({ invalid_type_error: "maxFee must be a number" })
+      .min(0, "maxFee cannot be negative")
       .optional(),
     minRating: z.coerce
       .number({ invalid_type_error: "minRating must be a number" })
       .min(0, "minRating cannot be negative")
       .max(5, "minRating cannot exceed 5")
-      .optional(),
-    rating: z.coerce
-      .number({ invalid_type_error: "rating must be a number" })
-      .min(0, "rating cannot be negative")
-      .max(5, "rating cannot exceed 5")
-      .optional(),
-    minFee: z.coerce
-      .number({ invalid_type_error: "minFee must be a number" })
-      .min(0, "minFee cannot be negative")
-      .optional(),
-    maxFee: z.coerce
-      .number({ invalid_type_error: "maxFee must be a number" })
-      .min(0, "maxFee cannot be negative")
       .optional(),
     page: z.coerce
       .number({ invalid_type_error: "page must be a number" })
@@ -178,7 +164,7 @@ export const doctorSearchQuerySchema = z
       .int("limit must be an integer")
       .min(1, "limit must be at least 1")
       .max(100, "limit cannot exceed 100")
-      .default(10),
+      .default(20),
     sort: z
       .enum(
         [
@@ -203,19 +189,7 @@ export const doctorSearchQuerySchema = z
       })
       .default("desc"),
   })
-  .strict()
-  .refine(
-    (data) => {
-      if (data.minFee !== undefined && data.maxFee !== undefined) {
-        return data.minFee <= data.maxFee;
-      }
-      return true;
-    },
-    {
-      message: "minFee cannot exceed maxFee",
-      path: ["minFee"],
-    }
-  );
+  .strict();
 
 export type DoctorSearchQuery = z.infer<typeof doctorSearchQuerySchema>;
 

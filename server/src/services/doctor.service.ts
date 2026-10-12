@@ -221,24 +221,16 @@ export class DoctorService {
       ];
     }
 
-    const minExp = query.minExperience ?? query.experience;
-    if (minExp !== undefined) {
-      matchDoctor.experienceYears = { $gte: minExp };
+    if (query.minExperience !== undefined) {
+      matchDoctor.experienceYears = { $gte: query.minExperience };
     }
 
-    const minRat = query.minRating ?? query.rating;
-    if (minRat !== undefined) {
-      matchDoctor.rating = { $gte: minRat };
+    if (query.minRating !== undefined) {
+      matchDoctor.rating = { $gte: query.minRating };
     }
 
-    if (query.minFee !== undefined || query.maxFee !== undefined) {
-      matchDoctor.consultationFee = {};
-      if (query.minFee !== undefined) {
-        matchDoctor.consultationFee.$gte = query.minFee;
-      }
-      if (query.maxFee !== undefined) {
-        matchDoctor.consultationFee.$lte = query.maxFee;
-      }
+    if (query.maxFee !== undefined) {
+      matchDoctor.consultationFee = { $lte: query.maxFee };
     }
 
     const userMatch: Record<string, any> = {
@@ -274,7 +266,7 @@ export class DoctorService {
     sortStage._id = 1;
 
     const page = Math.max(1, query.page || 1);
-    const limit = Math.max(1, Math.min(100, query.limit || 10));
+    const limit = Math.max(1, Math.min(100, query.limit || 20));
     const skip = (page - 1) * limit;
 
     const pipeline: mongoose.PipelineStage[] = [

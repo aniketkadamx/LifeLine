@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Request, Response, NextFunction } from "express";
+import { AppError } from "../utils/api-error.js";
 
 /**
  * Registration request body schema.
@@ -77,5 +78,28 @@ export function validateQuery<T>(schema: z.ZodSchema<T>) {
     } catch (error) {
       next(error);
     }
+  };
+}
+
+/**
+ * Express middleware helper to validate request route parameters against a Zod schema.
+ * Replaces req.params with parsed and validated values.
+ * If validation fails, forwards an AppError.badRequest (HTTP 400) to preserve
+ * the established API error taxonomy and status conventions for malformed path parameters.
+ */
+export function validateParams<T>(schema: z.ZodSchema<T>) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.params);
+    if (!result.success) {
+      const issue = result.error.issues[0];
+      return next(
+        AppError.badRequest(
+          issue?.message || "Invalid route parameters",
+          "BAD_REQUEST"
+        )
+      );
+    }
+    req.params = result.data as any;
+    next();
   };
 }

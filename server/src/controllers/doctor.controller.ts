@@ -181,7 +181,7 @@ export async function submitVerificationDocumentsHandler(
  * Public search and discovery endpoint for verified doctors:
  * - Publicly accessible (no authentication required).
  * - Filters strictly by verificationStatus === APPROVED_VERIFIED and user.status === ACTIVE inside database query.
- * - Supports filters: search, specialization, location, minExperience, minRating, minFee, maxFee.
+ * - Supports filters: search, specialization, location, minExperience, minRating, maxFee.
  * - Returns paginated summary cards with complete pagination metadata.
  * - Strips all sensitive documents, storage keys (fileKey), and internal review notes.
  */

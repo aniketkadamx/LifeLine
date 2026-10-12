@@ -8,8 +8,13 @@ import {
 } from "../controllers/doctor.controller.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { authorizeRole } from "../middlewares/role.middleware.js";
-import { validateBody, validateQuery } from "../validators/auth.validator.js";
 import {
+  validateBody,
+  validateParams,
+  validateQuery,
+} from "../validators/auth.validator.js";
+import {
+  doctorIdParamSchema,
   doctorSearchQuerySchema,
   submitVerificationDocumentsSchema,
   updateDoctorProfileSchema,
@@ -81,4 +86,8 @@ doctorRouter.get(
  * Public detailed profile for a verified doctor.
  * Source: docs/api/API_CONTRACT.md Section 4.2.
  */
-doctorRouter.get("/:id", getPublicDoctorByIdHandler);
+doctorRouter.get(
+  "/:id",
+  validateParams(doctorIdParamSchema),
+  getPublicDoctorByIdHandler
+);
