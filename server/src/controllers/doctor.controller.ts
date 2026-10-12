@@ -6,8 +6,9 @@ import {
 import { auditLogService } from "../services/audit-log.service.js";
 import { AuditAction, UserRole } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
-import { sendSuccess } from "../utils/api-response.js";
+import { sendPaginated, sendSuccess } from "../utils/api-response.js";
 import type {
+  DoctorSearchQuery,
   SubmitVerificationDocumentsInput,
   UpdateDoctorProfileInput,
 } from "../validators/doctor.validator.js";
@@ -160,15 +161,76 @@ export async function submitVerificationDocumentsHandler(
       status: "SUCCESS",
     });
 
-    sendSuccess(
+      sendSuccess(
+        res,
+        {
+          status: updatedProfile.verificationStatus,
+          profile: sanitizeDoctorProfile(updatedProfile),
+        },
+        "Verification documents submitted successfully",
+        200
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+/**
+ * Handler: GET /api/v1/doctors
+ *
+ * Public search and discovery endpoint for verified doctors:
+ * - Publicly accessible (no authentication required).
+ * - Filters strictly by verificationStatus === APPROVED_VERIFIED and user.status === ACTIVE inside database query.
+ * - Supports filters: search, specialization, location, minExperience, minRating, minFee, maxFee.
+ * - Returns paginated summary cards with complete pagination metadata.
+ * - Strips all sensitive documents, storage keys (fileKey), and internal review notes.
+ */
+export async function listPublicDoctorsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const query = req.query as unknown as DoctorSearchQuery;
+    const result = await doctorService.searchPublicDoctors(query);
+
+    sendPaginated(
       res,
+      result.doctors,
       {
-        status: updatedProfile.verificationStatus,
-        profile: sanitizeDoctorProfile(updatedProfile),
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        sort: (query.sort as string) || "rating",
+        order: (query.order as "asc" | "desc") || "desc",
       },
-      "Verification documents submitted successfully",
+      "Public doctor directory retrieved successfully",
       200
     );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Handler: GET /api/v1/doctors/:id
+ *
+ * Public detailed profile retrieval for a specific verified doctor:
+ * - Publicly accessible (no authentication required).
+ * - Enforces the same public eligibility rule: only APPROVED_VERIFIED and ACTIVE doctors are returned.
+ * - Direct requests for unverified or inactive doctors return 404 DOCTOR_NOT_FOUND.
+ * - Never leaks private document keys (fileKey) or administrative verification notes.
+ */
+export async function getPublicDoctorByIdHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const doctor = await doctorService.getPublicDoctorById(id);
+
+    sendSuccess(res, doctor, "Doctor profile retrieved successfully", 200);
   } catch (error) {
     next(error);
   }

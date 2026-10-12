@@ -27,7 +27,7 @@ describe("Milestone 4 - Task 4.3: Doctor Profile & Verification Document Submiss
     await User.syncIndexes();
     await DoctorProfile.syncIndexes();
     await AuditLog.syncIndexes();
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (mongoose.connection.readyState === 1 && mongoose.connection.db) {

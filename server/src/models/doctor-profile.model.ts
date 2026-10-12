@@ -152,6 +152,7 @@ const doctorProfileSchema = new Schema<IDoctorProfile>(
 // Compound index for public doctor discovery and search filtering
 doctorProfileSchema.index({ verificationStatus: 1, specialization: 1, rating: -1 });
 doctorProfileSchema.index({ "clinicAddress.city": 1, verificationStatus: 1 });
+doctorProfileSchema.index({ verificationStatus: 1, consultationFee: 1 });
 
 doctorProfileSchema.plugin(toJSONPlugin);
 

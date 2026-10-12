@@ -3,11 +3,14 @@ import {
   getDoctorProfileHandler,
   updateDoctorProfileHandler,
   submitVerificationDocumentsHandler,
+  listPublicDoctorsHandler,
+  getPublicDoctorByIdHandler,
 } from "../controllers/doctor.controller.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { authorizeRole } from "../middlewares/role.middleware.js";
-import { validateBody } from "../validators/auth.validator.js";
+import { validateBody, validateQuery } from "../validators/auth.validator.js";
 import {
+  doctorSearchQuerySchema,
   submitVerificationDocumentsSchema,
   updateDoctorProfileSchema,
 } from "../validators/doctor.validator.js";
@@ -61,3 +64,21 @@ doctorRouter.post(
   validateBody(submitVerificationDocumentsSchema),
   submitVerificationDocumentsHandler
 );
+
+/**
+ * GET /api/v1/doctors
+ * Public doctor directory search and filtering.
+ * Source: docs/api/API_CONTRACT.md Section 4.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 5.1.
+ */
+doctorRouter.get(
+  "/",
+  validateQuery(doctorSearchQuerySchema),
+  listPublicDoctorsHandler
+);
+
+/**
+ * GET /api/v1/doctors/:id
+ * Public detailed profile for a verified doctor.
+ * Source: docs/api/API_CONTRACT.md Section 4.2.
+ */
+doctorRouter.get("/:id", getPublicDoctorByIdHandler);

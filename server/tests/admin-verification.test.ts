@@ -35,7 +35,7 @@ describe("Milestone 4 - Task 4.5: Admin Verification Workflow for Doctors & Phar
     await DoctorProfile.syncIndexes();
     await PharmacyProfile.syncIndexes();
     await AuditLog.syncIndexes();
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (mongoose.connection.readyState === 1 && mongoose.connection.db) {

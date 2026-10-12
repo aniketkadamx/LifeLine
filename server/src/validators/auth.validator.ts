@@ -63,3 +63,19 @@ export function validateBody<T>(schema: z.ZodSchema<T>) {
     }
   };
 }
+
+/**
+ * Express middleware helper to validate request query parameters against a Zod schema.
+ * Replaces req.query with parsed and coerced values.
+ * Forwards ZodError directly to centralized error-handling middleware.
+ */
+export function validateQuery<T>(schema: z.ZodSchema<T>) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    try {
+      req.query = schema.parse(req.query) as any;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}

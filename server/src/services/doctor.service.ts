@@ -2,10 +2,13 @@ import mongoose from "mongoose";
 import { DoctorProfile } from "../models/doctor-profile.model.js";
 import {
   DoctorVerificationStatus,
+  UserStatus,
+  type ConsultationType,
   type IDoctorProfile,
 } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
 import type {
+  DoctorSearchQuery,
   SubmitVerificationDocumentsInput,
   UpdateDoctorProfileInput,
 } from "../validators/doctor.validator.js";
@@ -184,6 +187,250 @@ export class DoctorService {
 
     return profile;
   }
+
+  /**
+   * Searches and filters the public directory of verified and active doctors.
+   *
+   * Eligibility Criteria (strictly enforced inside the database query):
+   * - verificationStatus === APPROVED_VERIFIED
+   * - user.status === ACTIVE
+   */
+  public async searchPublicDoctors(query: DoctorSearchQuery): Promise<{
+    doctors: PublicDoctorSummary[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const matchDoctor: Record<string, any> = {
+      verificationStatus: DoctorVerificationStatus.APPROVED_VERIFIED,
+    };
+
+    if (query.specialization) {
+      matchDoctor.specialization = {
+        $regex: `^${escapeRegex(query.specialization)}$`,
+        $options: "i",
+      };
+    }
+
+    if (query.location) {
+      const locRegex = { $regex: escapeRegex(query.location), $options: "i" };
+      matchDoctor.$or = [
+        { "clinicAddress.city": locRegex },
+        { "clinicAddress.state": locRegex },
+        { "clinicAddress.postalCode": locRegex },
+      ];
+    }
+
+    const minExp = query.minExperience ?? query.experience;
+    if (minExp !== undefined) {
+      matchDoctor.experienceYears = { $gte: minExp };
+    }
+
+    const minRat = query.minRating ?? query.rating;
+    if (minRat !== undefined) {
+      matchDoctor.rating = { $gte: minRat };
+    }
+
+    if (query.minFee !== undefined || query.maxFee !== undefined) {
+      matchDoctor.consultationFee = {};
+      if (query.minFee !== undefined) {
+        matchDoctor.consultationFee.$gte = query.minFee;
+      }
+      if (query.maxFee !== undefined) {
+        matchDoctor.consultationFee.$lte = query.maxFee;
+      }
+    }
+
+    const userMatch: Record<string, any> = {
+      "user.status": UserStatus.ACTIVE,
+    };
+
+    if (query.search) {
+      const searchRegex = { $regex: escapeRegex(query.search), $options: "i" };
+      userMatch.$or = [
+        { "user.fullName": searchRegex },
+        { clinicName: searchRegex },
+      ];
+    }
+
+    const sortFieldMap: Record<string, string> = {
+      rating: "rating",
+      experience: "experienceYears",
+      experienceYears: "experienceYears",
+      fee: "consultationFee",
+      consultationFee: "consultationFee",
+      createdAt: "createdAt",
+    };
+
+    const sortField = sortFieldMap[query.sort || "rating"] || "rating";
+    const sortOrder = query.order === "asc" ? 1 : -1;
+
+    const sortStage: Record<string, 1 | -1> = {
+      [sortField]: sortOrder,
+    };
+    if (sortField === "rating") {
+      sortStage.totalReviews = -1;
+    }
+    sortStage._id = 1;
+
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.max(1, Math.min(100, query.limit || 10));
+    const skip = (page - 1) * limit;
+
+    const pipeline: mongoose.PipelineStage[] = [
+      { $match: matchDoctor },
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      { $unwind: "$user" },
+      { $match: userMatch },
+      {
+        $facet: {
+          metadata: [{ $count: "total" }],
+          data: [
+            { $sort: sortStage },
+            { $skip: skip },
+            { $limit: limit },
+          ],
+        },
+      },
+    ];
+
+    const [result] = await DoctorProfile.aggregate(pipeline);
+    const total = result?.metadata?.[0]?.total || 0;
+    const rawDoctors = result?.data || [];
+    const doctors = rawDoctors.map((doc: any) =>
+      serializePublicDoctorSummary(doc)
+    );
+
+    return {
+      doctors,
+      total,
+      page,
+      limit,
+    };
+  }
+
+  /**
+   * Retrieves public details of a specific verified and active doctor.
+   *
+   * Enforces the public eligibility rule inside query:
+   * Returns 404 DOCTOR_NOT_FOUND if the doctor does not exist,
+   * is unverified, or user account is not ACTIVE.
+   */
+  public async getPublicDoctorById(
+    doctorId: string
+  ): Promise<PublicDoctorDetail> {
+    if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+      throw AppError.badRequest("Invalid doctor identifier format", "BAD_REQUEST");
+    }
+
+    const doctorObjectId = new mongoose.Types.ObjectId(doctorId);
+
+    const pipeline: mongoose.PipelineStage[] = [
+      {
+        $match: {
+          $or: [{ _id: doctorObjectId }, { userId: doctorObjectId }],
+          verificationStatus: DoctorVerificationStatus.APPROVED_VERIFIED,
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      { $unwind: "$user" },
+      {
+        $match: {
+          "user.status": UserStatus.ACTIVE,
+        },
+      },
+    ];
+
+    const [doctor] = await DoctorProfile.aggregate(pipeline);
+
+    if (!doctor) {
+      throw AppError.notFound("Doctor not found", "DOCTOR_NOT_FOUND");
+    }
+
+    return serializePublicDoctorDetail(doctor);
+  }
+}
+
+export interface PublicDoctorSummary {
+  id: string;
+  name: string;
+  avatar?: string;
+  specialization: string;
+  qualifications: string[];
+  experienceYears: number;
+  clinicName?: string;
+  clinicAddress?: {
+    street?: string;
+    city: string;
+    state: string;
+    postalCode?: string;
+    country?: string;
+  };
+  languages: string[];
+  consultationFee: number;
+  consultationTypes: ConsultationType[];
+  rating: number;
+  totalReviews: number;
+}
+
+export interface PublicDoctorDetail extends PublicDoctorSummary {
+  bio?: string;
+  registrationCouncil?: string;
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function serializePublicDoctorSummary(doc: any): PublicDoctorSummary {
+  return {
+    id: doc._id?.toString() || doc.id,
+    name: doc.user?.fullName || doc.name || "",
+    avatar: doc.user?.avatar || doc.avatar,
+    specialization: doc.specialization,
+    qualifications: Array.isArray(doc.qualifications) ? doc.qualifications : [],
+    experienceYears: doc.experienceYears ?? 0,
+    clinicName: doc.clinicName,
+    clinicAddress: doc.clinicAddress
+      ? {
+          street: doc.clinicAddress.street,
+          city: doc.clinicAddress.city,
+          state: doc.clinicAddress.state,
+          postalCode: doc.clinicAddress.postalCode,
+          country: doc.clinicAddress.country,
+        }
+      : undefined,
+    languages: Array.isArray(doc.languages) ? doc.languages : ["English"],
+    consultationFee: doc.consultationFee ?? 0,
+    consultationTypes: Array.isArray(doc.consultationTypes)
+      ? doc.consultationTypes
+      : [],
+    rating: doc.rating ?? 0,
+    totalReviews: doc.totalReviews ?? 0,
+  };
+}
+
+export function serializePublicDoctorDetail(doc: any): PublicDoctorDetail {
+  const summary = serializePublicDoctorSummary(doc);
+  return {
+    ...summary,
+    bio: doc.bio,
+    registrationCouncil: doc.registrationCouncil,
+  };
 }
 
 /**

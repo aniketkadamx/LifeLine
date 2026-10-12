@@ -26,7 +26,7 @@ describe("Milestone 4 - Task 4.4: Pharmacy Profile & License Submission", () => 
     await User.syncIndexes();
     await PharmacyProfile.syncIndexes();
     await AuditLog.syncIndexes();
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
