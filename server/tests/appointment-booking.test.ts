@@ -22,6 +22,7 @@ import {
 } from "../src/types/models.js";
 import { tokenService } from "../src/services/token.service.js";
 import { appointmentService } from "../src/services/appointment.service.js";
+import { availabilityService } from "../src/services/availability.service.js";
 
 describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock", () => {
   let ipCounter = 4000;
@@ -145,7 +146,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -170,7 +171,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
 
       const res = await request(app)
         .post("/api/v1/appointments")
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -189,7 +190,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${doctorToken}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -208,7 +209,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: "invalid-not-hex-id",
           appointmentType: "VIDEO",
@@ -228,7 +229,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "SMOKE_SIGNAL",
@@ -248,7 +249,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const resBadDate = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -262,7 +263,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const resShortReason = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -283,7 +284,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -303,7 +304,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: nonExistentId,
           appointmentType: "VIDEO",
@@ -325,7 +326,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -347,7 +348,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -370,7 +371,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -405,7 +406,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -432,7 +433,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -474,7 +475,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res1 = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${patient1Token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -487,7 +488,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res2 = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${patient2Token}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -527,7 +528,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${newPatientToken}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -580,7 +581,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${newPatientToken}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -618,7 +619,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${newPatientToken}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -658,7 +659,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const res = await request(app)
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${newPatientToken}`)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -709,7 +710,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", "not-a-valid-uuidv4")
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -740,7 +741,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res1.status).toBe(201);
@@ -751,7 +752,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res2.status).toBe(201);
@@ -776,7 +777,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -790,7 +791,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -820,13 +821,13 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send(payload),
         request(app)
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send(payload),
       ]);
 
@@ -880,7 +881,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res.status).toBe(409);
@@ -927,7 +928,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res.status).toBe(201);
@@ -986,19 +987,19 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send(payload),
         request(app)
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send(payload),
         request(app)
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send(payload),
       ]);
 
@@ -1066,7 +1067,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res.status).toBe(201);
@@ -1106,7 +1107,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send({
           doctorId: profile._id.toString(),
           appointmentType: "VIDEO",
@@ -1139,7 +1140,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res1.status).toBe(500);
@@ -1155,7 +1156,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res2.status).toBe(201);
@@ -1185,7 +1186,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       // The controller returns 500 because the service threw the update error
@@ -1212,7 +1213,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         .post("/api/v1/appointments")
         .set("Authorization", `Bearer ${token}`)
         .set("Idempotency-Key", idempotencyKey)
-        .set("X-Forwarded-For", getUniqueIp())
+        .set("x-test-client-ip", getUniqueIp())
         .send(payload);
 
       expect(res2.status).toBe(201);
@@ -1252,7 +1253,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${patient.token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send({
             doctorId: profile._id.toString(),
             appointmentType: "VIDEO",
@@ -1328,7 +1329,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
           .post("/api/v1/appointments")
           .set("Authorization", `Bearer ${patient.token}`)
           .set("Idempotency-Key", idempotencyKey)
-          .set("X-Forwarded-For", getUniqueIp())
+          .set("x-test-client-ip", getUniqueIp())
           .send({
             doctorId: profile._id.toString(),
             appointmentType: "VIDEO",
@@ -1373,6 +1374,445 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       expect(new Date(activeAppt[0].lockExpiresAt!).getTime()).toBeGreaterThan(
         Date.now()
       );
+    });
+  });
+
+  // =========================================================================
+  // 5. Deterministic Concurrency & Fencing Tests
+  // =========================================================================
+  describe("5. Deterministic Concurrency & Fencing Tests", () => {
+    function createDeferred<T = void>() {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it("1. lease takeover & old-owner fencing: pauses request 1, retry takes over lease, and old owner is fenced from completing, overwriting, or duplicating", async () => {
+      const { profile } = await createDoctorFixture();
+      const { token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const targetSlot = "2026-10-15T09:00:00.000Z";
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: targetSlot,
+        reason: "Deterministic lease takeover barrier test",
+      };
+
+      const request1ReachedBarrier = createDeferred();
+      const request1ReleaseBarrier = createDeferred();
+      let interceptRequest1 = true;
+
+      const originalCompute =
+        availabilityService.computeAvailableSlots.bind(availabilityService);
+      const availabilitySpy = vi
+        .spyOn(availabilityService, "computeAvailableSlots")
+        .mockImplementation((...args: [string, string]) => {
+          if (interceptRequest1) {
+            interceptRequest1 = false;
+            return originalCompute(...args).then((res) => {
+              request1ReachedBarrier.resolve();
+              return request1ReleaseBarrier.promise.then(() => res);
+            });
+          }
+          return originalCompute(...args);
+        });
+
+      try {
+        // Fire Request 1 (which acquires initial claim, then pauses at the barrier)
+        const req1Promise = request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payload)
+          .then((res) => res);
+
+        // Wait until Request 1 has acquired the idempotency record and reached the barrier
+        await request1ReachedBarrier.promise;
+
+        // Verify Request 1 acquired the lease in MongoDB with an ownerToken
+        const initialRecord = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(initialRecord).not.toBeNull();
+        expect(initialRecord!.status).toBe(IdempotencyStatus.PROCESSING);
+        const oldOwnerToken = initialRecord!.ownerToken;
+        expect(oldOwnerToken).toBeDefined();
+
+        // Expire Request 1's lease in MongoDB
+        await IdempotencyRecord.updateOne(
+          { key: idempotencyKey },
+          { $set: { lockedUntil: new Date(Date.now() - 5000) } }
+        );
+
+        // Fire Request 2 (retry). Because interceptRequest1 is now false, Request 2 runs to completion
+        const res2 = await request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payload);
+
+        expect(res2.status).toBe(201);
+        expect(res2.body.success).toBe(true);
+        const apptId2 = res2.body.data.appointmentId;
+        expect(apptId2).toBeDefined();
+
+        // Verify IdempotencyRecord is marked COMPLETED with Request 2's appointment
+        const recordAfterReq2 = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(recordAfterReq2!.status).toBe(IdempotencyStatus.COMPLETED);
+        expect(recordAfterReq2!.appointmentId!.toString()).toBe(apptId2);
+
+        // Now release Request 1 from its barrier
+        request1ReleaseBarrier.resolve();
+        const res1 = await req1Promise;
+
+        // Request 1 must be fenced with 409 IDEMPOTENCY_CONFLICT
+        expect(res1.status).toBe(409);
+        expect(res1.body.success).toBe(false);
+        expect(res1.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+
+        // Verify in database: exactly ONE appointment exists
+        const appointments = await Appointment.find({ idempotencyKey });
+        expect(appointments).toHaveLength(1);
+        expect(appointments[0]._id.toString()).toBe(apptId2);
+
+        // Verify completed record was not overwritten or corrupted by Request 1
+        const finalRecord = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(finalRecord!.status).toBe(IdempotencyStatus.COMPLETED);
+        expect(finalRecord!.appointmentId!.toString()).toBe(apptId2);
+      } finally {
+        availabilitySpy.mockRestore();
+        request1ReleaseBarrier.resolve();
+      }
+    });
+
+    it("2. failure cleanup fencing: an old owner's error path cannot delete a newer owner's claim", async () => {
+      const { profile } = await createDoctorFixture();
+      const { token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Old owner error path cleanup fencing test",
+      };
+
+      const request1ReachedBarrier = createDeferred();
+      const request1ReleaseBarrier = createDeferred();
+
+      const availabilitySpy = vi
+        .spyOn(availabilityService, "computeAvailableSlots")
+        .mockImplementation(() => {
+          request1ReachedBarrier.resolve();
+          return request1ReleaseBarrier.promise.then(() => {
+            // Simulate an error inside Request 1 before appointment creation
+            throw new Error("Simulated unexpected failure during availability check");
+          });
+        });
+
+      try {
+        // Request 1 starts and acquires initial claim
+        const req1Promise = request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payload)
+          .then((res) => res);
+
+        await request1ReachedBarrier.promise;
+
+        // Verify Request 1 acquired the claim with initial ownerToken
+        const initialRecord = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(initialRecord).not.toBeNull();
+        const oldOwnerToken = initialRecord!.ownerToken;
+        expect(oldOwnerToken).toBeDefined();
+
+        // Expire the lease and simulate takeover by a new owner
+        const newOwnerToken = crypto.randomUUID();
+        await IdempotencyRecord.updateOne(
+          { key: idempotencyKey },
+          {
+            $set: {
+              ownerToken: newOwnerToken,
+              lockedUntil: new Date(Date.now() + 60000),
+            },
+          }
+        );
+
+        // Now trigger the failure in Request 1
+        request1ReleaseBarrier.resolve();
+        const res1 = await req1Promise;
+
+        // Request 1 failed (HTTP 500 because availability threw)
+        expect(res1.status).toBe(500);
+
+        // Verify Request 1's error cleanup DID NOT delete the claim, because the claim now belongs to newOwnerToken!
+        const recordAfterFailure = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(recordAfterFailure).not.toBeNull();
+        expect(recordAfterFailure!.ownerToken).toBe(newOwnerToken);
+        expect(recordAfterFailure!.status).toBe(IdempotencyStatus.PROCESSING);
+      } finally {
+        availabilitySpy.mockRestore();
+        request1ReleaseBarrier.resolve();
+      }
+    });
+
+    it("3. reservation safety with payload mismatch: request targeting a different slot with the same key is rejected even if lease expired, and cannot steal claim", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payloadA = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Original reservation for 9am",
+      };
+      const payloadB = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:30:00.000Z",
+        reason: "Conflicting reservation for 9:30am with same key",
+      };
+
+      const request1ReachedBarrier = createDeferred();
+      const request1ReleaseBarrier = createDeferred();
+
+      const originalCompute =
+        availabilityService.computeAvailableSlots.bind(availabilityService);
+      const availabilitySpy = vi
+        .spyOn(availabilityService, "computeAvailableSlots")
+        .mockImplementation((...args: [string, string]) => {
+          request1ReachedBarrier.resolve();
+          return request1ReleaseBarrier.promise.then(() =>
+            originalCompute(...args)
+          );
+        });
+
+      try {
+        // Request 1 starts for Slot A (09:00)
+        const req1Promise = request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payloadA)
+          .then((res) => res);
+
+        await request1ReachedBarrier.promise;
+
+        // Expire the lease in MongoDB
+        await IdempotencyRecord.updateOne(
+          { key: idempotencyKey },
+          { $set: { lockedUntil: new Date(Date.now() - 5000) } }
+        );
+
+        // Request 2 arrives with the same key but different payload (Slot B)
+        const res2 = await request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payloadB);
+
+        // Request 2 must be rejected with 409 IDEMPOTENCY_CONFLICT
+        expect(res2.status).toBe(409);
+        expect(res2.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+
+        // Release Request 1 to complete Slot A
+        request1ReleaseBarrier.resolve();
+
+        const res1 = await req1Promise;
+        expect(res1.status).toBe(201);
+
+        // Verify: Slot A was booked, Slot B was NOT booked
+        const apptA = await Appointment.findOne({
+          doctorId: doctorUser._id,
+          scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+        });
+        expect(apptA).not.toBeNull();
+
+        const apptB = await Appointment.findOne({
+          doctorId: doctorUser._id,
+          scheduledStart: new Date("2026-10-15T09:30:00.000Z"),
+        });
+        expect(apptB).toBeNull();
+
+        // Exactly ONE appointment created in total
+        const total = await Appointment.countDocuments({ idempotencyKey });
+        expect(total).toBe(1);
+      } finally {
+        availabilitySpy.mockRestore();
+        request1ReleaseBarrier.resolve();
+      }
+    });
+
+    it("4. reservation safety: compound unique index { patientId: 1, idempotencyKey: 1 } prevents duplicate appointments and maps to 409 IDEMPOTENCY_CONFLICT", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: patientUser } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+
+      // Directly create appointment 1 for this patient with this idempotency key
+      const appt1 = await Appointment.create({
+        patientId: patientUser._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: "First appointment",
+        fee: 1000,
+        currency: "INR",
+        lockExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        idempotencyKey,
+      });
+      expect(appt1).toBeDefined();
+
+      // Attempting to directly create a second appointment for the same patient and idempotency key
+      // MUST trigger Mongo duplicate key error on patientId_1_idempotencyKey_1
+      let dbError: any;
+      try {
+        await Appointment.create({
+          patientId: patientUser._id,
+          doctorId: doctorUser._id,
+          appointmentType: ConsultationType.VIDEO,
+          scheduledStart: new Date("2026-10-15T10:00:00.000Z"), // Different time slot
+          scheduledEnd: new Date("2026-10-15T10:30:00.000Z"),
+          status: AppointmentStatus.PENDING_PAYMENT,
+          reason: "Second conflicting appointment for same patient",
+          fee: 1000,
+          currency: "INR",
+          lockExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+          idempotencyKey,
+        });
+      } catch (err: any) {
+        dbError = err;
+      }
+
+      expect(dbError).toBeDefined();
+      expect(dbError.code).toBe(11000);
+      expect(JSON.stringify(dbError)).toContain("idempotencyKey");
+
+      // Verify that appointmentService handles duplicate idempotency key errors gracefully with 409 IDEMPOTENCY_CONFLICT
+      await expect(
+        appointmentService["executeSlotReservation"](
+          patientUser._id.toString(),
+          profile,
+          {
+            doctorId: profile._id.toString(),
+            appointmentType: ConsultationType.VIDEO,
+            scheduledStart: "2026-10-15T10:00:00.000Z",
+            reason: "Another attempt",
+          },
+          new Date("2026-10-15T10:00:00.000Z"),
+          new Date("2026-10-15T10:30:00.000Z"),
+          idempotencyKey
+        )
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "IDEMPOTENCY_CONFLICT",
+      });
+    });
+
+    it("5. recovery after persistence: recovers original response values (id, fee, currency, status, lock expiration) without recomputing from mutable doctor data", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture({
+        consultationFee: 1500,
+      });
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const targetSlot = "2026-10-15T09:00:00.000Z";
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: targetSlot,
+        reason: "Original response preservation test",
+      };
+
+      const originalLockExpiresAt = new Date(Date.now() + 12 * 60 * 1000); // 12 mins remaining
+      const originalFee = 1500;
+      const originalCurrency = "INR";
+
+      // Seed pre-existing appointment created previously
+      const originalAppt = await Appointment.create({
+        patientId: patientUser._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date(targetSlot),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: payload.reason,
+        fee: originalFee,
+        currency: originalCurrency,
+        lockExpiresAt: originalLockExpiresAt,
+        idempotencyKey,
+      });
+
+      // Seed idempotency record in PROCESSING with expired lease (completion was interrupted)
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex");
+
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 5000), // Expired lease
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      // Now mutate doctor profile's consultation fee to prove response does NOT recompute from mutable data
+      await DoctorProfile.updateOne(
+        { _id: profile._id },
+        { $set: { consultationFee: 3000 } }
+      );
+
+      // Retry request
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("x-test-client-ip", getUniqueIp())
+        .send(payload);
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toBe("Slot reserved for 15 minutes. Please complete payment.");
+      expect(res.body.data.appointmentId).toBe(originalAppt._id.toString());
+      expect(res.body.data.status).toBe("PENDING_PAYMENT");
+      expect(res.body.data.fee).toBe(1500); // Original fee (1500), NOT mutated fee (3000)!
+      expect(res.body.data.currency).toBe("INR");
+      expect(res.body.data.expiresAt).toBe(originalLockExpiresAt.toISOString());
+      expect(res.body.data.isReplayed).toBe(true);
+
+      // Verify no duplicate appointment was created
+      const count = await Appointment.countDocuments({ idempotencyKey });
+      expect(count).toBe(1);
+
+      // Verify idempotency record is completed
+      const idemp = await IdempotencyRecord.findOne({ key: idempotencyKey });
+      expect(idemp!.status).toBe(IdempotencyStatus.COMPLETED);
     });
   });
 });

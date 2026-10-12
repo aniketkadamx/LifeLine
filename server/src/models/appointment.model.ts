@@ -137,6 +137,17 @@ appointmentSchema.index(
 appointmentSchema.index({ patientId: 1, scheduledStart: -1 });
 appointmentSchema.index({ doctorId: 1, scheduledStart: -1 });
 
+// Idempotency uniqueness index: prevents a patient from ever having two appointments for the same idempotency key
+appointmentSchema.index(
+  { patientId: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      idempotencyKey: { $type: "string" },
+    },
+  }
+);
+
 appointmentSchema.plugin(toJSONPlugin);
 
 export const Appointment: Model<IAppointment> = model<IAppointment>(

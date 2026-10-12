@@ -68,6 +68,40 @@ export class AppointmentService {
   }
 
   /**
+   * Helper: checks if a MongoDB error is a duplicate key error specifically
+   * on the patientId + idempotencyKey unique constraint.
+   */
+  private isIdempotencyDuplicateKeyError(err: unknown): boolean {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      ("code" in err || "name" in err)
+    ) {
+      const code = (err as { code?: number }).code;
+      const name = (err as { name?: string }).name;
+      if (code === 11000 || (name === "MongoServerError" && code === 11000)) {
+        const mongoErr = err as {
+          keyPattern?: Record<string, unknown>;
+          keyValue?: Record<string, unknown>;
+          message?: string;
+        };
+        const keyPattern = mongoErr.keyPattern || mongoErr.keyValue;
+        if (keyPattern && "idempotencyKey" in keyPattern) {
+          return true;
+        }
+        if (
+          typeof mongoErr.message === "string" &&
+          (mongoErr.message.includes("idempotencyKey") ||
+            mongoErr.message.includes("patientId_1_idempotencyKey_1"))
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
    * Helper: reconstructs the standard appointment reservation result
    * from an existing appointment document.
    */
@@ -155,6 +189,13 @@ export class AppointmentService {
           "Slot is already reserved or booked by another patient"
         );
       }
+      if (this.isIdempotencyDuplicateKeyError(saveError)) {
+        throw new AppError(
+          409,
+          "IDEMPOTENCY_CONFLICT",
+          "An appointment for this idempotency key was already created"
+        );
+      }
       throw saveError;
     }
 
@@ -198,6 +239,7 @@ export class AppointmentService {
 
     const userObjectId = new mongoose.Types.ObjectId(patientUserId);
     let recordClaimed = false;
+    let currentOwnerToken: string | undefined;
 
     // 1. Idempotency Check & Claim (if Idempotency-Key provided)
     if (idempotencyKey) {
@@ -215,6 +257,7 @@ export class AppointmentService {
 
       const expiresAt24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const leaseExpiresAt = new Date(Date.now() + IDEMPOTENCY_LEASE_MS);
+      const initialOwnerToken = crypto.randomUUID();
 
       try {
         await IdempotencyRecord.create({
@@ -223,9 +266,11 @@ export class AppointmentService {
           operation: "APPOINTMENT_RESERVATION",
           requestHash,
           status: IdempotencyStatus.PROCESSING,
+          ownerToken: initialOwnerToken,
           lockedUntil: leaseExpiresAt,
           expiresAt: expiresAt24h,
         });
+        currentOwnerToken = initialOwnerToken;
         recordClaimed = true;
       } catch (idempError: unknown) {
         // If duplicate key error on (key, userId, operation), inspect existing record
@@ -313,13 +358,14 @@ export class AppointmentService {
                     "Slot reserved for 15 minutes. Please complete payment.",
                   appointmentId: existingAppointment._id,
                 },
-                $unset: { lockedUntil: 1 },
+                $unset: { lockedUntil: 1, ownerToken: 1 },
               }
             );
             return result;
           }
 
-          // No existing appointment: attempt to acquire the stale lease atomically
+          // No existing appointment: attempt to acquire the stale lease atomically with a NEW ownerToken
+          const newOwnerToken = crypto.randomUUID();
           const acquired = await IdempotencyRecord.findOneAndUpdate(
             {
               _id: existing._id,
@@ -331,6 +377,7 @@ export class AppointmentService {
             },
             {
               $set: {
+                ownerToken: newOwnerToken,
                 lockedUntil: new Date(nowMs + IDEMPOTENCY_LEASE_MS),
               },
             },
@@ -346,6 +393,7 @@ export class AppointmentService {
             );
           }
 
+          currentOwnerToken = newOwnerToken;
           recordClaimed = true;
         } else {
           throw idempError;
@@ -457,6 +505,25 @@ export class AppointmentService {
         scheduledStart.getTime() + durationMinutes * 60 * 1000
       );
 
+      // Pre-creation ownership fence: verify we still hold active ownership before persisting
+      if (idempotencyKey && currentOwnerToken) {
+        const stillOwner = await IdempotencyRecord.exists({
+          key: idempotencyKey,
+          userId: userObjectId,
+          operation: "APPOINTMENT_RESERVATION",
+          ownerToken: currentOwnerToken,
+          status: IdempotencyStatus.PROCESSING,
+        });
+
+        if (!stillOwner) {
+          throw new AppError(
+            409,
+            "IDEMPOTENCY_CONFLICT",
+            "Idempotency claim lease expired and was acquired by another request"
+          );
+        }
+      }
+
       // 6. Execute atomic slot reservation
       const result = await this.executeSlotReservation(
         patientUserId,
@@ -467,13 +534,14 @@ export class AppointmentService {
         idempotencyKey
       );
 
-      // If idempotency was active, mark record as COMPLETED
-      if (idempotencyKey && recordClaimed) {
-        await IdempotencyRecord.updateOne(
+      // If idempotency was active, mark record as COMPLETED conditional on currentOwnerToken
+      if (idempotencyKey && recordClaimed && currentOwnerToken) {
+        const updateResult = await IdempotencyRecord.updateOne(
           {
             key: idempotencyKey,
             userId: userObjectId,
             operation: "APPOINTMENT_RESERVATION",
+            ownerToken: currentOwnerToken, // Fenced update
           },
           {
             $set: {
@@ -484,9 +552,25 @@ export class AppointmentService {
                 "Slot reserved for 15 minutes. Please complete payment.",
               appointmentId: new mongoose.Types.ObjectId(result.appointmentId),
             },
-            $unset: { lockedUntil: 1 },
+            $unset: { lockedUntil: 1, ownerToken: 1 },
           }
         );
+
+        if (updateResult.matchedCount === 0) {
+          // Ownership was lost after reservation creation!
+          const currentRecord = await IdempotencyRecord.findOne({
+            key: idempotencyKey,
+            userId: userObjectId,
+            operation: "APPOINTMENT_RESERVATION",
+          });
+          if (currentRecord?.status !== IdempotencyStatus.COMPLETED) {
+            throw new AppError(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "Idempotency claim lease expired and was acquired by another request"
+            );
+          }
+        }
       }
 
       // Asynchronous audit logging (fail-safe)
@@ -514,8 +598,8 @@ export class AppointmentService {
 
       return result;
     } catch (error) {
-      // Safe recovery on failure:
-      if (idempotencyKey && recordClaimed) {
+      // Safe recovery on failure conditional on currentOwnerToken:
+      if (idempotencyKey && recordClaimed && currentOwnerToken) {
         // Did the appointment actually get created?
         const persistedAppt = await Appointment.findOne({
           patientId: userObjectId,
@@ -523,8 +607,8 @@ export class AppointmentService {
         });
 
         if (persistedAppt) {
-          // The appointment WAS created, but a subsequent step (e.g. idempotency update or audit) failed.
-          // DO NOT delete the idempotency claim! Try to complete it so subsequent retries succeed cleanly.
+          // The appointment WAS created, but a subsequent step failed.
+          // DO NOT delete the idempotency claim! Try to complete it conditionally on ownerToken
           try {
             const replayed = this.buildReplayResponse(persistedAppt, true);
             await IdempotencyRecord.updateOne(
@@ -532,6 +616,7 @@ export class AppointmentService {
                 key: idempotencyKey,
                 userId: userObjectId,
                 operation: "APPOINTMENT_RESERVATION",
+                ownerToken: currentOwnerToken, // Fenced!
               },
               {
                 $set: {
@@ -542,19 +627,20 @@ export class AppointmentService {
                     "Slot reserved for 15 minutes. Please complete payment.",
                   appointmentId: persistedAppt._id,
                 },
-                $unset: { lockedUntil: 1 },
+                $unset: { lockedUntil: 1, ownerToken: 1 },
               }
             );
           } catch {
-            // Leave in PROCESSING with lockedUntil so retry recovery can handle it!
+            // Leave in PROCESSING with lockedUntil so retry recovery can handle it
           }
         } else {
           // The appointment definitely was NOT created.
-          // Safely delete the claim so the operation can be retried cleanly.
+          // Safely delete the claim ONLY if we are still the current owner!
           await IdempotencyRecord.deleteOne({
             key: idempotencyKey,
             userId: userObjectId,
             operation: "APPOINTMENT_RESERVATION",
+            ownerToken: currentOwnerToken, // Fenced! Old owner cannot delete new owner's claim!
           });
         }
       }

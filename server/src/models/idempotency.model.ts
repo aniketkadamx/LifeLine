@@ -12,6 +12,7 @@ export interface IIdempotencyRecord {
   operation: string;
   requestHash: string;
   status: IdempotencyStatus;
+  ownerToken?: string; // Fencing token identifying the current lease holder
   lockedUntil?: Date; // Active processing lease expiration
   appointmentId?: Types.ObjectId; // Associated appointment ID if created
   responseStatus?: number;
@@ -48,6 +49,10 @@ const idempotencyRecordSchema = new Schema<IIdempotencyRecord>(
       enum: Object.values(IdempotencyStatus),
       default: IdempotencyStatus.PROCESSING,
       required: true,
+    },
+    ownerToken: {
+      type: String,
+      trim: true,
     },
     lockedUntil: {
       type: Date,
