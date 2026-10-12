@@ -860,7 +860,23 @@ describe("Milestone 4 - Task 4.3: Doctor Profile & Verification Document Submiss
       expect(resGet.body.data.verificationDocuments.length).toBe(2);
       expect(resGet.body.data.verificationDocuments[0].fileKey).toBeUndefined();
       expect(resGet.body.data.verificationDocuments[1].fileKey).toBeUndefined();
+
+      // Verify PUT /me/profile also does not leak private fileKey
+      const resPut = await request(app)
+        .put("/api/v1/doctors/me/profile")
+        .set("Authorization", `Bearer ${token}`)
+        .set("x-test-client-ip", getUniqueIp())
+        .send({ bio: "Updating bio after upload" });
+
+      expect(resPut.status).toBe(200);
+      const putBodyStr = JSON.stringify(resPut.body);
+      expect(putBodyStr).not.toContain(privateKey1);
+      expect(putBodyStr).not.toContain(privateKey2);
+      expect(putBodyStr).not.toContain("__v");
+      expect(resPut.body.data.verificationDocuments[0].fileKey).toBeUndefined();
+      expect(resPut.body.data.verificationDocuments[1].fileKey).toBeUndefined();
     });
+
 
     it("15. Success responses adhere to universal success envelope format", async () => {
       const { token } = await createDoctorUser();
