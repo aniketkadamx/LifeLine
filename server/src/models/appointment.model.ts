@@ -95,6 +95,12 @@ const appointmentSchema = new Schema<IAppointment>(
       type: Schema.Types.ObjectId,
       ref: "Appointment",
     },
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
   },
   {
     timestamps: true,

@@ -10,6 +10,7 @@ import {
   DoctorAvailability,
   Appointment,
   IdempotencyRecord,
+  IdempotencyStatus,
 } from "../src/models/index.js";
 import {
   UserRole,
@@ -509,7 +510,7 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       });
 
       // Insert an expired lock (expired 10 minutes ago)
-      await Appointment.create({
+      const oldExpiredAppt = await Appointment.create({
         patientId: oldPatient._id,
         doctorId: doctorUser._id,
         appointmentType: ConsultationType.VIDEO,
@@ -537,7 +538,15 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
 
-      // Verify the old appointment was cancelled and new one is active
+      // Verify the old appointment was cancelled with proper metadata
+      const oldApptInDb = await Appointment.findById(oldExpiredAppt._id);
+      expect(oldApptInDb!.status).toBe(AppointmentStatus.CANCELLED);
+      expect(oldApptInDb!.cancellation?.reason).toBe(
+        "15-minute reservation lock expired without payment"
+      );
+      expect(oldApptInDb!.cancellation?.cancelledAt).toBeDefined();
+
+      // Verify new one is active and has a future expiration
       const activeAppt = await Appointment.find({
         doctorId: doctorUser._id,
         scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
@@ -545,6 +554,83 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       });
       expect(activeAppt).toHaveLength(1);
       expect(activeAppt[0]._id.toString()).toBe(res.body.data.appointmentId);
+      expect(new Date(activeAppt[0].lockExpiresAt!).getTime()).toBeGreaterThan(
+        Date.now()
+      );
+    });
+
+    it("conservatively blocks booking when a reservation has no lockExpiresAt (legacy record)", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: legacyPatient } = await createPatientFixture();
+      const { token: newPatientToken } = await createPatientFixture();
+
+      // Legacy appointment without lockExpiresAt
+      const legacyAppt = await Appointment.create({
+        patientId: legacyPatient._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: "Legacy booking without expiration field",
+        fee: 1200,
+        currency: "INR",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${newPatientToken}`)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send({
+          doctorId: profile._id.toString(),
+          appointmentType: "VIDEO",
+          scheduledStart: "2026-10-15T09:00:00.000Z",
+          reason: "Attempt booking over legacy record",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("APPOINTMENT_SLOT_UNAVAILABLE");
+
+      // Verify the legacy record was NOT silently cancelled
+      const legacyInDb = await Appointment.findById(legacyAppt._id);
+      expect(legacyInDb!.status).toBe(AppointmentStatus.PENDING_PAYMENT);
+    });
+
+    it("unexpired reservation continues to block the slot with 409", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: activePatient } = await createPatientFixture();
+      const { token: newPatientToken } = await createPatientFixture();
+
+      // Active unexpired lock (expires in 10 minutes)
+      const activeLock = await Appointment.create({
+        patientId: activePatient._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: "Active holding lock",
+        fee: 1200,
+        currency: "INR",
+        lockExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      });
+
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${newPatientToken}`)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send({
+          doctorId: profile._id.toString(),
+          appointmentType: "VIDEO",
+          scheduledStart: "2026-10-15T09:00:00.000Z",
+          reason: "Attempt booking over unexpired lock",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("APPOINTMENT_SLOT_UNAVAILABLE");
+
+      const lockInDb = await Appointment.findById(activeLock._id);
+      expect(lockInDb!.status).toBe(AppointmentStatus.PENDING_PAYMENT);
     });
 
     it("allows booking when a previous reservation was CANCELLED", async () => {
@@ -755,6 +841,390 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       });
       expect(totalAppointments).toBe(1);
     });
+
+    it("rejects retry against an active PROCESSING claim whose lease is still unexpired with 409 IDEMPOTENCY_CONFLICT", async () => {
+      const { profile } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Lease testing active claim",
+      };
+
+      const normalizedPayload = {
+        doctorId: payload.doctorId,
+        appointmentType: payload.appointmentType,
+        scheduledStart: new Date(payload.scheduledStart).toISOString(),
+        reason: payload.reason.trim(),
+      };
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(normalizedPayload))
+        .digest("hex");
+
+      // Seed an active claim with lockedUntil 30 seconds into the future
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() + 30 * 1000),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+      expect(res.body.error.message).toContain("currently being processed");
+    });
+
+    it("stale PROCESSING claim with expired lease and no appointment is safely recovered and creates the reservation", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Recover stale uncompleted reservation",
+      };
+
+      const normalizedPayload = {
+        doctorId: payload.doctorId,
+        appointmentType: payload.appointmentType,
+        scheduledStart: new Date(payload.scheduledStart).toISOString(),
+        reason: payload.reason.trim(),
+      };
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(normalizedPayload))
+        .digest("hex");
+
+      // Seed a stale claim (expired lease, no appointment created)
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 5000),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.status).toBe("PENDING_PAYMENT");
+
+      // Verify the idempotency record was marked COMPLETED
+      const idempDoc = await IdempotencyRecord.findOne({ key: idempotencyKey });
+      expect(idempDoc!.status).toBe(IdempotencyStatus.COMPLETED);
+      expect(idempDoc!.appointmentId).toBeDefined();
+
+      // Verify exactly ONE appointment was created
+      const apptCount = await Appointment.countDocuments({
+        doctorId: doctorUser._id,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+      });
+      expect(apptCount).toBe(1);
+    });
+
+    it("multiple simultaneous retries against a stale PROCESSING claim allow at most one operation to proceed", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Simultaneous stale retry test",
+      };
+
+      const normalizedPayload = {
+        doctorId: payload.doctorId,
+        appointmentType: payload.appointmentType,
+        scheduledStart: new Date(payload.scheduledStart).toISOString(),
+        reason: payload.reason.trim(),
+      };
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(normalizedPayload))
+        .digest("hex");
+
+      // Seed a stale claim
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 10000),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const results = await Promise.all([
+        request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("X-Forwarded-For", getUniqueIp())
+          .send(payload),
+        request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("X-Forwarded-For", getUniqueIp())
+          .send(payload),
+        request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("X-Forwarded-For", getUniqueIp())
+          .send(payload),
+      ]);
+
+      const successResponses = results.filter((r) => r.status === 201);
+      expect(successResponses.length).toBeGreaterThanOrEqual(1);
+
+      // Verify in database: exactly ONE appointment document was created
+      const apptCount = await Appointment.countDocuments({
+        doctorId: doctorUser._id,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+      });
+      expect(apptCount).toBe(1);
+    });
+
+    it("stale PROCESSING claim whose appointment was already persisted recovers and replays the original appointment", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Pre-existing appointment recovery",
+      };
+
+      const normalizedPayload = {
+        doctorId: payload.doctorId,
+        appointmentType: payload.appointmentType,
+        scheduledStart: new Date(payload.scheduledStart).toISOString(),
+        reason: payload.reason.trim(),
+      };
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(normalizedPayload))
+        .digest("hex");
+
+      // Seed an appointment already saved with this idempotencyKey
+      const preExistingAppt = await Appointment.create({
+        patientId: patientUser._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: payload.reason,
+        fee: 1200,
+        currency: "INR",
+        lockExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        idempotencyKey,
+      });
+
+      // Seed a stale PROCESSING claim
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 5000),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.appointmentId).toBe(preExistingAppt._id.toString());
+
+      // Verify no duplicate appointment was created
+      const totalCount = await Appointment.countDocuments({
+        doctorId: doctorUser._id,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+      });
+      expect(totalCount).toBe(1);
+
+      // Verify idempotency record is now COMPLETED
+      const idemp = await IdempotencyRecord.findOne({ key: idempotencyKey });
+      expect(idemp!.status).toBe(IdempotencyStatus.COMPLETED);
+    });
+
+    it("reusing a stale claim with a DIFFERENT payload still rejects with 409 IDEMPOTENCY_CONFLICT", async () => {
+      const { profile } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+
+      // Seed stale record for payload A
+      const hashA = crypto.createHash("sha256").update("payload-A").digest("hex");
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash: hashA,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 5000),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const res = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send({
+          doctorId: profile._id.toString(),
+          appointmentType: "VIDEO",
+          scheduledStart: "2026-10-15T09:00:00.000Z",
+          reason: "Payload B is different from A",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    });
+
+    it("partial failure: simulated failure during appointment insert unpoisons the claim allowing immediate retry", async () => {
+      const { profile } = await createDoctorFixture();
+      const { token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Fault injection insert test",
+      };
+
+      // Mock appointment save to fail once
+      const saveSpy = vi
+        .spyOn(Appointment.prototype, "save")
+        .mockRejectedValueOnce(new Error("Simulated transient MongoDB network failure"));
+
+      const res1 = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      expect(res1.status).toBe(500);
+
+      // Verify the claim was deleted (unpoisoned)
+      const claim = await IdempotencyRecord.findOne({ key: idempotencyKey });
+      expect(claim).toBeNull();
+
+      saveSpy.mockRestore();
+
+      // Immediate retry with the same idempotency key succeeds
+      const res2 = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      expect(res2.status).toBe(201);
+      expect(res2.body.success).toBe(true);
+    });
+
+    it("partial failure: simulated failure after appointment save but before idempotency completion retains the claim and enables clean replay on retry without duplicates", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: "2026-10-15T09:00:00.000Z",
+        reason: "Fault injection completion test",
+      };
+
+      // Spy on IdempotencyRecord.updateOne to fail when marking COMPLETED
+      const updateOneSpy = vi
+        .spyOn(IdempotencyRecord, "updateOne")
+        .mockRejectedValueOnce(
+          new Error("Simulated network timeout during idempotency completion update")
+        );
+
+      const res1 = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      // The controller returns 500 because the service threw the update error
+      expect(res1.status).toBe(500);
+
+      // Verify the appointment WAS created in MongoDB
+      const createdAppt = await Appointment.findOne({ idempotencyKey });
+      expect(createdAppt).not.toBeNull();
+
+      // Verify the idempotency record was NOT blindly deleted
+      const idempRecord = await IdempotencyRecord.findOne({ key: idempotencyKey });
+      expect(idempRecord).not.toBeNull();
+
+      updateOneSpy.mockRestore();
+
+      // Expire the lease to simulate recovering the claim
+      await IdempotencyRecord.updateOne(
+        { key: idempotencyKey },
+        { $set: { lockedUntil: new Date(Date.now() - 5000) } }
+      );
+
+      // Retry request with the identical key and payload
+      const res2 = await request(app)
+        .post("/api/v1/appointments")
+        .set("Authorization", `Bearer ${token}`)
+        .set("Idempotency-Key", idempotencyKey)
+        .set("X-Forwarded-For", getUniqueIp())
+        .send(payload);
+
+      expect(res2.status).toBe(201);
+      expect(res2.body.data.appointmentId).toBe(createdAppt!._id.toString());
+
+      // Verify no duplicate appointment was created in MongoDB
+      const totalCount = await Appointment.countDocuments({
+        doctorId: doctorUser._id,
+        scheduledStart: new Date("2026-10-15T09:00:00.000Z"),
+      });
+      expect(totalCount).toBe(1);
+    });
   });
 
   // =========================================================================
@@ -821,6 +1291,88 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
         },
       });
       expect(totalBookingsInDb).toBe(1);
+    });
+
+    it("concurrent expired-slot reuse: 5 simultaneous requests against an expired slot yield exactly 1 success (201) and 4 conflicts (409) with no accidental cancellation of the winner", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: oldPatient } = await createPatientFixture();
+
+      const targetSlot = "2026-10-15T09:00:00.000Z";
+
+      // Seed an expired reservation on the slot
+      await Appointment.create({
+        patientId: oldPatient._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date(targetSlot),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: "Old expired lock on target slot",
+        fee: 1200,
+        currency: "INR",
+        lockExpiresAt: new Date(Date.now() - 5000),
+      });
+
+      // 5 concurrent patients attempting to book the expired slot simultaneously
+      const patients = await Promise.all([
+        createPatientFixture({ fullName: "Expired Reuse Patient 1" }),
+        createPatientFixture({ fullName: "Expired Reuse Patient 2" }),
+        createPatientFixture({ fullName: "Expired Reuse Patient 3" }),
+        createPatientFixture({ fullName: "Expired Reuse Patient 4" }),
+        createPatientFixture({ fullName: "Expired Reuse Patient 5" }),
+      ]);
+
+      const promises = patients.map((patient, index) => {
+        const idempotencyKey = crypto.randomUUID();
+        return request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${patient.token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("X-Forwarded-For", getUniqueIp())
+          .send({
+            doctorId: profile._id.toString(),
+            appointmentType: "VIDEO",
+            scheduledStart: targetSlot,
+            reason: `Race for expired slot by patient ${index + 1}`,
+          });
+      });
+
+      const results = await Promise.all(promises);
+
+      const successfulResponses = results.filter((r) => r.status === 201);
+      const conflictResponses = results.filter((r) => r.status === 409);
+
+      // Exactly ONE wins the slot
+      expect(successfulResponses).toHaveLength(1);
+      expect(successfulResponses[0].body.success).toBe(true);
+      expect(successfulResponses[0].body.data.status).toBe("PENDING_PAYMENT");
+
+      // Exactly FOUR receive 409 APPOINTMENT_SLOT_UNAVAILABLE
+      expect(conflictResponses).toHaveLength(4);
+      for (const conflict of conflictResponses) {
+        expect(conflict.body.success).toBe(false);
+        expect(conflict.body.error.code).toBe("APPOINTMENT_SLOT_UNAVAILABLE");
+      }
+
+      // Verify the winner's appointment is active and was NOT accidentally cancelled
+      const activeAppt = await Appointment.find({
+        doctorId: doctorUser._id,
+        scheduledStart: new Date(targetSlot),
+        status: {
+          $in: [
+            AppointmentStatus.PENDING_PAYMENT,
+            AppointmentStatus.CONFIRMED,
+            AppointmentStatus.IN_PROGRESS,
+          ],
+        },
+      });
+      expect(activeAppt).toHaveLength(1);
+      expect(activeAppt[0]._id.toString()).toBe(
+        successfulResponses[0].body.data.appointmentId
+      );
+      expect(new Date(activeAppt[0].lockExpiresAt!).getTime()).toBeGreaterThan(
+        Date.now()
+      );
     });
   });
 });

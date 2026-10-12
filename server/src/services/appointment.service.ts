@@ -18,6 +18,8 @@ import { auditLogService } from "./audit-log.service.js";
 import { availabilityService } from "./availability.service.js";
 import type { CreateAppointmentInput } from "../validators/appointment.validator.js";
 
+export const IDEMPOTENCY_LEASE_MS = 60_000; // 60 seconds lease for active reservation processing
+
 export interface AppointmentReservationResult {
   appointmentId: string;
   status: AppointmentStatus;
@@ -66,6 +68,31 @@ export class AppointmentService {
   }
 
   /**
+   * Helper: reconstructs the standard appointment reservation result
+   * from an existing appointment document.
+   */
+  private buildReplayResponse(
+    appointment: any,
+    isReplayed = true
+  ): AppointmentReservationResult {
+    const createdAtMs = appointment.createdAt
+      ? new Date(appointment.createdAt).getTime()
+      : Date.now();
+    const expiresAtIso = appointment.lockExpiresAt
+      ? new Date(appointment.lockExpiresAt).toISOString()
+      : new Date(createdAtMs + 15 * 60 * 1000).toISOString();
+
+    return {
+      appointmentId: appointment._id.toString(),
+      status: appointment.status,
+      expiresAt: expiresAtIso,
+      fee: appointment.fee,
+      currency: appointment.currency,
+      isReplayed,
+    };
+  }
+
+  /**
    * Internal worker: executes the atomic reservation insert into MongoDB.
    */
   private async executeSlotReservation(
@@ -73,19 +100,21 @@ export class AppointmentService {
     doctorProfile: any,
     input: CreateAppointmentInput,
     scheduledStart: Date,
-    scheduledEnd: Date
+    scheduledEnd: Date,
+    idempotencyKey?: string
   ): Promise<AppointmentReservationResult> {
     const doctorTargetId =
       doctorProfile.userId._id || doctorProfile.userId;
 
     // Concurrency preparation: release any previously expired PENDING_PAYMENT lock
     // on this exact slot so expired reservations do not block new bookings.
+    // Conservative: only cancel if lockExpiresAt is explicitly set and in the past.
     await Appointment.updateMany(
       {
         doctorId: doctorTargetId,
         scheduledStart,
         status: AppointmentStatus.PENDING_PAYMENT,
-        lockExpiresAt: { $lte: new Date() },
+        lockExpiresAt: { $lte: new Date(), $exists: true, $ne: null },
       },
       {
         $set: {
@@ -113,6 +142,7 @@ export class AppointmentService {
       fee,
       currency,
       lockExpiresAt: expiresAt,
+      idempotencyKey,
     });
 
     try {
@@ -137,13 +167,6 @@ export class AppointmentService {
     };
   }
 
-  /**
-   * Reserves an appointment slot with atomic double-booking concurrency locking
-   * and 24-hour idempotency protection.
-   *
-   * Endpoint: POST /api/v1/appointments
-   * Source: docs/api/API_CONTRACT.md Section 6.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.1.
-   */
   /**
    * Reserves an appointment slot with atomic double-booking concurrency locking
    * and 24-hour idempotency protection.
@@ -176,9 +199,7 @@ export class AppointmentService {
     const userObjectId = new mongoose.Types.ObjectId(patientUserId);
     let recordClaimed = false;
 
-    // 1. Idempotency Check (if Idempotency-Key provided)
-    // Check first so that repeated requests return the cached response rather
-    // than failing against the slot they previously reserved.
+    // 1. Idempotency Check & Claim (if Idempotency-Key provided)
     if (idempotencyKey) {
       const normalizedPayload = {
         doctorId: input.doctorId,
@@ -193,6 +214,7 @@ export class AppointmentService {
         .digest("hex");
 
       const expiresAt24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const leaseExpiresAt = new Date(Date.now() + IDEMPOTENCY_LEASE_MS);
 
       try {
         await IdempotencyRecord.create({
@@ -201,6 +223,7 @@ export class AppointmentService {
           operation: "APPOINTMENT_RESERVATION",
           requestHash,
           status: IdempotencyStatus.PROCESSING,
+          lockedUntil: leaseExpiresAt,
           expiresAt: expiresAt24h,
         });
         recordClaimed = true;
@@ -226,6 +249,7 @@ export class AppointmentService {
             );
           }
 
+          // 1A. Deterministic Payload Mismatch Rejection
           if (existing.requestHash !== requestHash) {
             throw new AppError(
               409,
@@ -234,6 +258,7 @@ export class AppointmentService {
             );
           }
 
+          // 1B. Completed Record Replay
           if (existing.status === IdempotencyStatus.COMPLETED) {
             const cachedData = existing.responseData as any;
             return {
@@ -246,13 +271,85 @@ export class AppointmentService {
             };
           }
 
-          throw new AppError(
-            409,
-            "IDEMPOTENCY_CONFLICT",
-            "Request with identical idempotency key is already processing"
+          // 1C. Active vs Stale PROCESSING Claim Recovery
+          const nowMs = Date.now();
+          const isLeaseActive =
+            existing.lockedUntil &&
+            existing.lockedUntil.getTime() > nowMs;
+
+          if (isLeaseActive) {
+            // Live in-flight request holds the lease
+            throw new AppError(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "Request with identical idempotency key is currently being processed"
+            );
+          }
+
+          // Stale / abandoned claim: first check if an appointment was already created!
+          const existingAppointment = await Appointment.findOne({
+            patientId: userObjectId,
+            idempotencyKey,
+            status: {
+              $in: [
+                AppointmentStatus.PENDING_PAYMENT,
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.IN_PROGRESS,
+              ],
+            },
+          });
+
+          if (existingAppointment) {
+            // Appointment was created previously! Reconstruct response and complete idempotency record
+            const result = this.buildReplayResponse(existingAppointment, true);
+            await IdempotencyRecord.updateOne(
+              { _id: existing._id },
+              {
+                $set: {
+                  status: IdempotencyStatus.COMPLETED,
+                  responseStatus: 201,
+                  responseData: result,
+                  responseMessage:
+                    "Slot reserved for 15 minutes. Please complete payment.",
+                  appointmentId: existingAppointment._id,
+                },
+                $unset: { lockedUntil: 1 },
+              }
+            );
+            return result;
+          }
+
+          // No existing appointment: attempt to acquire the stale lease atomically
+          const acquired = await IdempotencyRecord.findOneAndUpdate(
+            {
+              _id: existing._id,
+              status: IdempotencyStatus.PROCESSING,
+              $or: [
+                { lockedUntil: { $lte: new Date(nowMs) } },
+                { lockedUntil: { $exists: false } },
+              ],
+            },
+            {
+              $set: {
+                lockedUntil: new Date(nowMs + IDEMPOTENCY_LEASE_MS),
+              },
+            },
+            { new: true }
           );
+
+          if (!acquired) {
+            // Another concurrent recovery request acquired the stale lease
+            throw new AppError(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "Request with identical idempotency key is currently being processed"
+            );
+          }
+
+          recordClaimed = true;
+        } else {
+          throw idempError;
         }
-        throw idempError;
       }
     }
 
@@ -300,7 +397,30 @@ export class AppointmentService {
         );
       }
 
-      // 4. Validate against doctor schedule and availability engine
+      const doctorTargetId =
+        doctorProfile.userId._id || doctorProfile.userId;
+
+      // 4. Pre-computation cleanup of expired locks:
+      // Clean up any expired PENDING_PAYMENT reservation on this exact slot
+      // BEFORE checking availability so that computeAvailableSlots sees the slot as free in DB.
+      // Follow conservative policy: only cancel if lockExpiresAt is explicitly set and in the past.
+      await Appointment.updateMany(
+        {
+          doctorId: doctorTargetId,
+          scheduledStart,
+          status: AppointmentStatus.PENDING_PAYMENT,
+          lockExpiresAt: { $lte: new Date(), $exists: true, $ne: null },
+        },
+        {
+          $set: {
+            status: AppointmentStatus.CANCELLED,
+            "cancellation.reason": "15-minute reservation lock expired without payment",
+            "cancellation.cancelledAt": new Date(),
+          },
+        }
+      );
+
+      // 5. Validate against doctor schedule and availability engine
       const dateStr = scheduledStart.toISOString().slice(0, 10);
       const timeStr = scheduledStart.toISOString().slice(11, 16);
 
@@ -337,13 +457,14 @@ export class AppointmentService {
         scheduledStart.getTime() + durationMinutes * 60 * 1000
       );
 
-      // 5. Execute atomic slot reservation
+      // 6. Execute atomic slot reservation
       const result = await this.executeSlotReservation(
         patientUserId,
         doctorProfile,
         input,
         scheduledStart,
-        scheduledEnd
+        scheduledEnd,
+        idempotencyKey
       );
 
       // If idempotency was active, mark record as COMPLETED
@@ -361,7 +482,9 @@ export class AppointmentService {
               responseData: result,
               responseMessage:
                 "Slot reserved for 15 minutes. Please complete payment.",
+              appointmentId: new mongoose.Types.ObjectId(result.appointmentId),
             },
+            $unset: { lockedUntil: 1 },
           }
         );
       }
@@ -391,13 +514,49 @@ export class AppointmentService {
 
       return result;
     } catch (error) {
-      // Unpoison the idempotency record so failed operations do not block retries
+      // Safe recovery on failure:
       if (idempotencyKey && recordClaimed) {
-        await IdempotencyRecord.deleteOne({
-          key: idempotencyKey,
-          userId: userObjectId,
-          operation: "APPOINTMENT_RESERVATION",
+        // Did the appointment actually get created?
+        const persistedAppt = await Appointment.findOne({
+          patientId: userObjectId,
+          idempotencyKey,
         });
+
+        if (persistedAppt) {
+          // The appointment WAS created, but a subsequent step (e.g. idempotency update or audit) failed.
+          // DO NOT delete the idempotency claim! Try to complete it so subsequent retries succeed cleanly.
+          try {
+            const replayed = this.buildReplayResponse(persistedAppt, true);
+            await IdempotencyRecord.updateOne(
+              {
+                key: idempotencyKey,
+                userId: userObjectId,
+                operation: "APPOINTMENT_RESERVATION",
+              },
+              {
+                $set: {
+                  status: IdempotencyStatus.COMPLETED,
+                  responseStatus: 201,
+                  responseData: replayed,
+                  responseMessage:
+                    "Slot reserved for 15 minutes. Please complete payment.",
+                  appointmentId: persistedAppt._id,
+                },
+                $unset: { lockedUntil: 1 },
+              }
+            );
+          } catch {
+            // Leave in PROCESSING with lockedUntil so retry recovery can handle it!
+          }
+        } else {
+          // The appointment definitely was NOT created.
+          // Safely delete the claim so the operation can be retried cleanly.
+          await IdempotencyRecord.deleteOne({
+            key: idempotencyKey,
+            userId: userObjectId,
+            operation: "APPOINTMENT_RESERVATION",
+          });
+        }
       }
       throw error;
     }
@@ -405,4 +564,3 @@ export class AppointmentService {
 }
 
 export const appointmentService = new AppointmentService();
-

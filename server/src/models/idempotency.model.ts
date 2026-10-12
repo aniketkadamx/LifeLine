@@ -12,6 +12,8 @@ export interface IIdempotencyRecord {
   operation: string;
   requestHash: string;
   status: IdempotencyStatus;
+  lockedUntil?: Date; // Active processing lease expiration
+  appointmentId?: Types.ObjectId; // Associated appointment ID if created
   responseStatus?: number;
   responseData?: Record<string, unknown>;
   responseMessage?: string;
@@ -46,6 +48,13 @@ const idempotencyRecordSchema = new Schema<IIdempotencyRecord>(
       enum: Object.values(IdempotencyStatus),
       default: IdempotencyStatus.PROCESSING,
       required: true,
+    },
+    lockedUntil: {
+      type: Date,
+    },
+    appointmentId: {
+      type: Schema.Types.ObjectId,
+      ref: "Appointment",
     },
     responseStatus: {
       type: Number,

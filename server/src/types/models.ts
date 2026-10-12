@@ -377,6 +377,7 @@ export interface IAppointment {
   cancellation?: IAppointmentCancellation;
   rescheduledFrom?: Types.ObjectId;
   rescheduledTo?: Types.ObjectId;
+  idempotencyKey?: string;
   createdAt: Date;
   updatedAt: Date;
 }
