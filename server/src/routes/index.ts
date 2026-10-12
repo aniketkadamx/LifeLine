@@ -3,6 +3,7 @@ import { authRouter } from "./auth.routes.js";
 import { userRouter } from "./user.routes.js";
 import { patientRouter } from "./patient.routes.js";
 import { doctorRouter } from "./doctor.routes.js";
+import { availabilityRouter } from "./availability.routes.js";
 import { pharmacyRouter } from "./pharmacy.routes.js";
 import { adminRouter } from "./admin.routes.js";
 
@@ -31,6 +32,7 @@ export {
   userRouter,
   patientRouter,
   doctorRouter,
+  availabilityRouter,
   pharmacyRouter,
   adminRouter,
 };

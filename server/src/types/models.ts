@@ -258,6 +258,64 @@ export interface IDoctorProfile {
 }
 
 /**
+ * Standard days of the week for recurring schedules.
+ * Source: docs/api/API_CONTRACT.md Section 5.2.
+ */
+export enum DayOfWeek {
+  MONDAY = "MONDAY",
+  TUESDAY = "TUESDAY",
+  WEDNESDAY = "WEDNESDAY",
+  THURSDAY = "THURSDAY",
+  FRIDAY = "FRIDAY",
+  SATURDAY = "SATURDAY",
+  SUNDAY = "SUNDAY",
+}
+
+/**
+ * Working shift interval in HH:mm 24-hour format.
+ */
+export interface IWorkingShift {
+  startTime: string; // "09:00"
+  endTime: string;   // "13:00"
+}
+
+/**
+ * Recurring weekly schedule for a single day of the week.
+ */
+export interface IWeeklyScheduleDay {
+  dayOfWeek: DayOfWeek;
+  shifts: IWorkingShift[];
+}
+
+/**
+ * Date-specific schedule exception or leave.
+ */
+export interface IScheduleException {
+  _id?: Types.ObjectId;
+  id?: string;
+  date: string; // "YYYY-MM-DD"
+  isAvailable: boolean; // false for leave/blocked, true for custom working day
+  reason?: string;
+  shifts?: IWorkingShift[];
+}
+
+/**
+ * Doctor availability configuration document interface.
+ * Source: MASTER_IMPLEMENTATION_ROADMAP.md Task 5.2 & docs/api/API_CONTRACT.md Section 5.2.
+ */
+export interface IDoctorAvailability {
+  _id: Types.ObjectId;
+  id?: string;
+  doctorId: Types.ObjectId;
+  slotDurationMinutes: number; // 15, 30, 60
+  weeklySchedule: IWeeklyScheduleDay[];
+  exceptions: IScheduleException[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+
+/**
  * PharmacyProfile document interface.
  */
 export interface IPharmacyProfile {

@@ -19,6 +19,7 @@ import {
   submitVerificationDocumentsSchema,
   updateDoctorProfileSchema,
 } from "../validators/doctor.validator.js";
+import { availabilityRouter } from "./availability.routes.js";
 import { UserRole } from "../types/models.js";
 
 export const doctorRouter = Router();
@@ -69,6 +70,12 @@ doctorRouter.post(
   validateBody(submitVerificationDocumentsSchema),
   submitVerificationDocumentsHandler
 );
+
+/**
+ * Doctor Availability & Schedule Management Routes.
+ * Source: docs/api/API_CONTRACT.md Group 5 & MASTER_IMPLEMENTATION_ROADMAP.md Task 5.2.
+ */
+doctorRouter.use(availabilityRouter);
 
 /**
  * GET /api/v1/doctors

@@ -5,6 +5,7 @@ export { DoctorProfile } from "./doctor-profile.model.js";
 export { PharmacyProfile } from "./pharmacy-profile.model.js";
 
 // Clinical & Appointment Models
+export { DoctorAvailability } from "./doctor-availability.model.js";
 export { Appointment } from "./appointment.model.js";
 export { Consultation } from "./consultation.model.js";
 export { MedicalRecord } from "./medical-record.model.js";
@@ -30,6 +31,7 @@ export {
   UserStatus,
   DoctorVerificationStatus,
   PharmacyVerificationStatus,
+  DayOfWeek,
   Gender,
   BloodGroup,
   ConsultationType,
@@ -52,6 +54,10 @@ export {
   type IUser,
   type IPatientProfile,
   type IDoctorProfile,
+  type IDoctorAvailability,
+  type IWorkingShift,
+  type IWeeklyScheduleDay,
+  type IScheduleException,
   type IPharmacyProfile,
   type IAppointment,
   type IAppointmentCancellation,
