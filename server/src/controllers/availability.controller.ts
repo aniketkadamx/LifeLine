@@ -174,3 +174,38 @@ export async function deleteScheduleExceptionHandler(
     next(error);
   }
 }
+
+/**
+ * Handler: GET /api/v1/doctors/:id/availability?date=YYYY-MM-DD
+ *
+ * Public endpoint: computes dynamically available appointment slots for a doctor on a target date.
+ * Source: docs/api/API_CONTRACT.md Section 5.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 5.3.
+ */
+export async function getPublicDoctorAvailabilityHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const doctorId = Array.isArray(req.params.id)
+      ? req.params.id[0]
+      : req.params.id;
+    const date = Array.isArray(req.query.date)
+      ? (req.query.date[0] as string)
+      : (req.query.date as string);
+
+    const result = await availabilityService.computeAvailableSlots(
+      doctorId,
+      date
+    );
+
+    sendSuccess(
+      res,
+      result,
+      "Doctor availability slots retrieved successfully",
+      200
+    );
+  } catch (error) {
+    next(error);
+  }
+}

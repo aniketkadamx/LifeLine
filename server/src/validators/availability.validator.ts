@@ -10,6 +10,33 @@ export function toMinutes(time: string): number {
 }
 
 /**
+ * Converts total minutes from midnight into "HH:mm" 24-hour string.
+ */
+export function minutesToTimeString(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+}
+
+/**
+ * Resolves day of week in UTC for YYYY-MM-DD date string.
+ */
+export function getDayOfWeekFromDateString(dateStr: string): DayOfWeek {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  const days: DayOfWeek[] = [
+    DayOfWeek.SUNDAY,
+    DayOfWeek.MONDAY,
+    DayOfWeek.TUESDAY,
+    DayOfWeek.WEDNESDAY,
+    DayOfWeek.THURSDAY,
+    DayOfWeek.FRIDAY,
+    DayOfWeek.SATURDAY,
+  ];
+  return days[dt.getUTCDay()];
+}
+
+/**
  * Checks whether an array of shifts contains any intersecting or overlapping time intervals.
  * Returns true if any two shifts overlap; false otherwise.
  * Touching adjacent shifts (e.g. 09:00-13:00 and 13:00-17:00) do NOT overlap.
@@ -239,3 +266,18 @@ export type UpdateAvailabilityInput = z.infer<typeof updateAvailabilitySchema>;
 export const exceptionDateParamSchema = z.object({
   date: dateStringSchema,
 });
+
+/**
+ * Query parameter validation schema for public doctor slot computation.
+ * Endpoint: GET /api/v1/doctors/:id/availability?date=YYYY-MM-DD
+ * Source: docs/api/API_CONTRACT.md Section 5.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 5.3.
+ */
+export const getDoctorAvailabilityQuerySchema = z
+  .object({
+    date: dateStringSchema,
+  })
+  .strict();
+
+export type GetDoctorAvailabilityQuery = z.infer<
+  typeof getDoctorAvailabilityQuerySchema
+>;
