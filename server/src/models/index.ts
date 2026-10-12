@@ -21,6 +21,11 @@ export { Notification } from "./notification.model.js";
 export { Review } from "./review.model.js";
 export { Complaint } from "./complaint.model.js";
 export { RefreshToken } from "./refresh-token.model.js";
+export {
+  IdempotencyRecord,
+  IdempotencyStatus,
+  type IIdempotencyRecord,
+} from "./idempotency.model.js";
 
 // Plugins
 export { toJSONPlugin } from "./plugins/index.js";
