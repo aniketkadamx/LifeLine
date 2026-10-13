@@ -2,6 +2,7 @@ import http from "node:http";
 import { Server as SocketIOServer } from "socket.io";
 import { app } from "./app.js";
 import { env, connectDatabase, disconnectDatabase } from "./config/index.js";
+import { startAllJobs, stopAllJobs } from "./jobs/index.js";
 
 const server = http.createServer(app);
 
@@ -22,10 +23,13 @@ io.on("connection", (socket) => {
 
 /**
  * Graceful application termination.
- * Closes HTTP server, Socket.IO connections, and the MongoDB connection pool.
+ * Closes background jobs, HTTP server, Socket.IO connections, and the MongoDB connection pool.
  */
 export async function shutdown(signal: string): Promise<void> {
   console.log(`\n[Server] Received ${signal}. Commencing graceful shutdown...`);
+
+  // Stop background jobs
+  stopAllJobs();
 
   // Close Socket.IO
   io.close(() => {
@@ -55,12 +59,16 @@ export async function shutdown(signal: string): Promise<void> {
 /**
  * Boots the application:
  * 1. Establishes MongoDB connection
- * 2. Starts HTTP & WebSocket server
+ * 2. Starts background maintenance jobs
+ * 3. Starts HTTP & WebSocket server
  */
 export async function startServer(): Promise<http.Server> {
   try {
     // Establish database connection before accepting traffic
     await connectDatabase();
+
+    // Start background maintenance jobs
+    startAllJobs();
 
     return new Promise((resolve) => {
       server.listen(env.PORT, () => {
