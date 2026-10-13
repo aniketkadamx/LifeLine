@@ -2,7 +2,10 @@ import type { Request, Response, NextFunction } from "express";
 import { paymentService } from "../services/payment.service.js";
 import { AppError } from "../utils/api-error.js";
 import { sendSuccess } from "../utils/api-response.js";
-import type { CreatePaymentIntentInput } from "../validators/payment.validator.js";
+import type {
+  CreatePaymentIntentInput,
+  ProcessRefundInput,
+} from "../validators/payment.validator.js";
 
 /**
  * Handler: POST /api/v1/payments/create-intent
@@ -58,6 +61,34 @@ export async function handleRazorpayWebhookHandler(
     const result = await paymentService.handleRazorpayWebhook(rawBuffer, signature);
 
     sendSuccess(res, result, "Webhook event processed successfully", 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Handler: POST /api/v1/payments/:id/refund
+ *
+ * Processes refund for an eligible payment transaction.
+ * Role: ADMIN.
+ * Source: docs/api/AUTHORIZATION_MATRIX.md Section 6.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+ */
+export async function processRefundHandler(
+  req: Request<{ id: string }, unknown, ProcessRefundInput>,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user || !req.user.id) {
+      throw AppError.unauthorized("Authentication required", "AUTH_TOKEN_MISSING");
+    }
+
+    const { id } = req.params;
+    const { amount, reason } = req.body || {};
+
+    const result = await paymentService.processRefund(id, amount, reason, req.user);
+
+    sendSuccess(res, result, "Payment refund processed successfully", 200);
   } catch (error) {
     next(error);
   }

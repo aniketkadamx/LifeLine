@@ -2,12 +2,14 @@ import crypto from "node:crypto";
 import mongoose from "mongoose";
 import { Appointment } from "../models/appointment.model.js";
 import { Payment } from "../models/payment.model.js";
+import { Notification } from "../models/notification.model.js";
 import {
   AppointmentStatus,
   PaymentStatus,
   PaymentTargetType,
   PaymentProvider,
   AuditAction,
+  NotificationType,
   type IPayment,
 } from "../types/models.js";
 import type { AuthenticatedUser } from "../types/express.js";
@@ -42,6 +44,19 @@ export interface WebhookProcessingResult {
   paymentId?: string;
   appointmentId?: string;
   orderId?: string;
+  message?: string;
+}
+
+/**
+ * Result data returned after processing a refund request.
+ */
+export interface ProcessRefundResult {
+  success: boolean;
+  status: "PROCESSED" | "PENDING" | "ALREADY_REFUNDED" | "FAILED";
+  paymentId: string;
+  refundId?: string;
+  amount: number;
+  currency: string;
   message?: string;
 }
 
@@ -326,6 +341,87 @@ export class PaymentService {
     }
 
     const event = payload?.event;
+
+    // Asynchronous provider refund confirmation
+    if (event === "refund.processed") {
+      const refundEntity = payload?.payload?.refund?.entity;
+      if (!refundEntity || !refundEntity.id) {
+        throw AppError.badRequest(
+          "Missing refund entity in webhook payload",
+          "INVALID_PAYLOAD"
+        );
+      }
+      const refundId = refundEntity.id;
+      const providerPaymentId = refundEntity.payment_id;
+
+      const payment = await Payment.findOne({
+        $or: [{ refundId }, { providerPaymentId }],
+      });
+
+      if (!payment) {
+        return {
+          acknowledged: true,
+          event,
+          status: "IGNORED",
+          message: `No payment found for refund ${refundId}`,
+        };
+      }
+
+      if (payment.status === PaymentStatus.REFUNDED) {
+        return {
+          acknowledged: true,
+          event,
+          status: "ALREADY_SETTLED",
+          paymentId: payment._id.toString(),
+          message: "Payment is already marked REFUNDED",
+        };
+      }
+
+      await Payment.updateOne(
+        { _id: payment._id },
+        {
+          $set: {
+            status: PaymentStatus.REFUNDED,
+            refundId: refundEntity.id,
+            refundStatus: "processed",
+            refundedAt: new Date(),
+          },
+          $unset: { failureCode: 1, failureReason: 1 },
+        }
+      );
+
+      if (payment.targetType === PaymentTargetType.APPOINTMENT) {
+        await Appointment.updateOne(
+          { _id: payment.targetId },
+          { $set: { paymentStatus: "REFUNDED" } }
+        );
+      }
+
+      void auditLogService.log({
+        actorId: payment.userId,
+        actorRole: "SYSTEM",
+        action: AuditAction.PAYMENT_REFUND_ISSUED,
+        resourceType: "Payment",
+        resourceId: payment._id.toString(),
+        patientId: payment.userId,
+        status: "SUCCESS",
+        metadata: {
+          source: "WEBHOOK",
+          providerRefundId: refundEntity.id,
+          amount: payment.refundAmount || payment.amount,
+          event,
+        },
+      });
+
+      return {
+        acknowledged: true,
+        event,
+        status: "SETTLED",
+        paymentId: payment._id.toString(),
+        message: "Refund settled via webhook callback",
+      };
+    }
+
     if (event !== "payment.captured") {
       // Unrelated valid event acknowledged without side effects
       return {
@@ -590,6 +686,501 @@ export class PaymentService {
       appointmentId: appointment._id.toString(),
       orderId: razorpayOrderId,
     };
+  }
+
+  /**
+   * Processes a financial refund for a captured payment via Razorpay Refunds API.
+   *
+   * Business Rules:
+   * 1. Validates payment identifier format (ObjectId).
+   * 2. Retrieves payment from database (404 if not found).
+   * 3. Idempotency checks:
+   *    - If already REFUNDED, returns acknowledged status without re-invoking gateway.
+   *    - If REFUND_PENDING, reconciles with provider to prevent double-refunding.
+   *    - If not SUCCESS, rejects with 409 PAYMENT_INVALID_TRANSITION.
+   * 4. Ensures payment has a valid providerPaymentId (must be captured).
+   * 5. Validates refund amount:
+   *    - Must be positive finite number.
+   *    - Must not exceed remaining refundable amount (payment.amount - (payment.refundAmount || 0)).
+   * 6. Converts amount to subunits (paise) integer-safely.
+   * 7. Concurrency lock: atomically sets status to REFUND_PENDING conditionally.
+   * 8. Executes external Razorpay refund API call outside DB transactions.
+   * 9. On gateway success:
+   *    - If status === "processed": updates Payment to REFUNDED, updates Appointment paymentStatus to "REFUNDED".
+   *    - If status === "pending": updates Payment to REFUND_PENDING (retains pending).
+   *    - Creates in-app Notification for patient.
+   *    - Emits real-time Socket.IO event.
+   *    - Records audit log (AuditAction.PAYMENT_REFUND_ISSUED).
+   * 10. On gateway failure:
+   *    - Records failure details (failureCode, failureReason, refundStatus: "failed") on Payment.
+   *    - Reverts status back to SUCCESS for manual admin retry.
+   *    - Records audit log failure.
+   *    - Throws AppError(500, "PAYMENT_REFUND_FAILED").
+   */
+  async processRefund(
+    paymentId: string,
+    amount?: number,
+    reason?: string,
+    actor?: AuthenticatedUser
+  ): Promise<ProcessRefundResult> {
+    if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+      throw AppError.badRequest(
+        "Invalid payment identifier format",
+        "BAD_REQUEST"
+      );
+    }
+
+    const payment = await Payment.findById(paymentId);
+    if (!payment) {
+      throw new AppError(404, "PAYMENT_NOT_FOUND", "Payment record not found");
+    }
+
+    // Idempotency: already refunded
+    if (payment.status === PaymentStatus.REFUNDED) {
+      return {
+        success: true,
+        status: "ALREADY_REFUNDED",
+        paymentId: payment._id.toString(),
+        refundId: payment.refundId,
+        amount: payment.refundAmount || payment.amount,
+        currency: payment.currency,
+        message: "Payment has already been refunded",
+      };
+    }
+
+    // Idempotency / reconciliation: refund pending
+    if (payment.status === PaymentStatus.REFUND_PENDING) {
+      if (payment.refundId) {
+        const razorpay = getRazorpayClient();
+        let providerRefund: any;
+        try {
+          if (typeof razorpay.refunds?.fetch === "function") {
+            providerRefund = await razorpay.refunds.fetch(payment.refundId);
+          } else if (
+            payment.providerPaymentId &&
+            typeof razorpay.payments?.fetchRefund === "function"
+          ) {
+            providerRefund = await razorpay.payments.fetchRefund(
+              payment.providerPaymentId,
+              payment.refundId
+            );
+          }
+        } catch {
+          // Provider fetch failed; keep existing pending status
+        }
+
+        if (providerRefund?.status === "processed") {
+          await Payment.updateOne(
+            { _id: payment._id },
+            {
+              $set: {
+                status: PaymentStatus.REFUNDED,
+                refundStatus: "processed",
+                refundedAt: new Date(),
+              },
+              $unset: { failureCode: 1, failureReason: 1 },
+            }
+          );
+          if (payment.targetType === PaymentTargetType.APPOINTMENT) {
+            await Appointment.updateOne(
+              { _id: payment.targetId },
+              { $set: { paymentStatus: "REFUNDED" } }
+            );
+          }
+          return {
+            success: true,
+            status: "PROCESSED",
+            paymentId: payment._id.toString(),
+            refundId: payment.refundId,
+            amount: payment.refundAmount || payment.amount,
+            currency: payment.currency,
+            message: "Reconciled with provider: refund processed",
+          };
+        }
+
+        return {
+          success: true,
+          status: "PENDING",
+          paymentId: payment._id.toString(),
+          refundId: payment.refundId,
+          amount: payment.refundAmount || payment.amount,
+          currency: payment.currency,
+          message: "Refund is currently pending provider settlement",
+        };
+      }
+    }
+
+    // Eligibility: must be SUCCESS
+    if (payment.status !== PaymentStatus.SUCCESS) {
+      throw new AppError(
+        409,
+        "PAYMENT_INVALID_TRANSITION",
+        `Cannot refund payment with status '${payment.status}'. Payment must be in SUCCESS state.`
+      );
+    }
+
+    // Must have providerPaymentId
+    if (!payment.providerPaymentId) {
+      throw new AppError(
+        400,
+        "PAYMENT_NO_PROVIDER_PAYMENT_ID",
+        "Payment record has no provider payment identifier (uncaptured payment)"
+      );
+    }
+
+    // Calculate & validate refund amount
+    const settledRefundAmount =
+      payment.refundStatus === "processed"
+        ? payment.refundAmount || 0
+        : 0;
+    const maxRefundable = payment.amount - settledRefundAmount;
+    let refundAmount: number;
+
+    if (amount !== undefined && amount !== null) {
+      if (
+        typeof amount !== "number" ||
+        !Number.isFinite(amount) ||
+        isNaN(amount) ||
+        amount <= 0
+      ) {
+        throw AppError.badRequest(
+          "Refund amount must be a positive finite number",
+          "INVALID_AMOUNT"
+        );
+      }
+
+      if (amount > maxRefundable) {
+        throw new AppError(
+          400,
+          "PAYMENT_REFUND_EXCEEDS_AMOUNT",
+          `Refund amount (${amount}) exceeds remaining refundable payment amount (${maxRefundable})`
+        );
+      }
+      refundAmount = amount;
+    } else {
+      if (maxRefundable <= 0) {
+        throw new AppError(
+          400,
+          "PAYMENT_REFUND_EXCEEDS_AMOUNT",
+          "Payment has already been fully refunded"
+        );
+      }
+      refundAmount = maxRefundable;
+    }
+
+    const cleanReason =
+      reason && typeof reason === "string" && reason.trim()
+        ? reason.trim()
+        : "Appointment cancellation refund";
+
+    const refundSubunits = convertToSmallestCurrencyUnit(
+      refundAmount,
+      payment.currency
+    );
+
+    // Concurrency lock: atomically transition to REFUND_PENDING
+    const lockedPayment = await Payment.findOneAndUpdate(
+      {
+        _id: payment._id,
+        status: PaymentStatus.SUCCESS,
+      },
+      {
+        $set: {
+          status: PaymentStatus.REFUND_PENDING,
+          refundAmount,
+          refundReason: cleanReason,
+        },
+      },
+      { new: true }
+    );
+
+    if (!lockedPayment) {
+      // Re-read current state
+      const current = await Payment.findById(payment._id);
+      if (current?.status === PaymentStatus.REFUNDED) {
+        return {
+          success: true,
+          status: "ALREADY_REFUNDED",
+          paymentId: payment._id.toString(),
+          refundId: current.refundId,
+          amount: current.refundAmount || payment.amount,
+          currency: payment.currency,
+          message: "Payment was refunded concurrently",
+        };
+      }
+      if (current?.status === PaymentStatus.REFUND_PENDING) {
+        return {
+          success: true,
+          status: "PENDING",
+          paymentId: payment._id.toString(),
+          refundId: current.refundId,
+          amount: current.refundAmount || payment.amount,
+          currency: payment.currency,
+          message: "Refund is being processed concurrently",
+        };
+      }
+      throw new AppError(
+        409,
+        "PAYMENT_CONCURRENT_REFUND",
+        "Payment refund is being processed concurrently"
+      );
+    }
+
+    // Call Razorpay Refunds API outside database transactions
+    const razorpay = getRazorpayClient();
+    let providerRefund: any;
+
+    try {
+      providerRefund = await razorpay.payments.refund(
+        payment.providerPaymentId,
+        {
+          amount: refundSubunits,
+          notes: {
+            paymentId: payment._id.toString(),
+            targetType: payment.targetType,
+            targetId: payment.targetId.toString(),
+            reason: cleanReason,
+          },
+        }
+      );
+    } catch (err: unknown) {
+      const errorMsg =
+        err instanceof Error ? err.message : "Razorpay refund request failed";
+      console.error(
+        `[PaymentService] Gateway refund failed for payment ${payment._id}: ${errorMsg}`
+      );
+
+      // Record recoverable failure on Payment and revert status to SUCCESS so it can be retried
+      await Payment.updateOne(
+        { _id: payment._id },
+        {
+          $set: {
+            status: PaymentStatus.SUCCESS,
+            failureCode: "PAYMENT_REFUND_FAILED",
+            failureReason: errorMsg,
+            refundStatus: "failed",
+          },
+          $unset: {
+            refundAmount: 1,
+            refundId: 1,
+          },
+        }
+      );
+
+      void auditLogService.log({
+        actorId: actor?.id || payment.userId,
+        actorRole: actor?.role || "SYSTEM",
+        action: AuditAction.PAYMENT_REFUND_ISSUED,
+        resourceType: "Payment",
+        resourceId: payment._id.toString(),
+        patientId: payment.userId,
+        status: "FAILURE",
+        metadata: {
+          error: errorMsg,
+          amount: refundAmount,
+          reason: cleanReason,
+          appointmentId: payment.targetId.toString(),
+        },
+      });
+
+      throw new AppError(
+        500,
+        "PAYMENT_REFUND_FAILED",
+        `Payment refund request failed: ${errorMsg}`
+      );
+    }
+
+    // Evaluate provider response
+    if (providerRefund?.status === "processed") {
+      await Payment.updateOne(
+        { _id: payment._id },
+        {
+          $set: {
+            status: PaymentStatus.REFUNDED,
+            refundId: providerRefund.id,
+            refundAmount,
+            refundStatus: "processed",
+            refundedAt: new Date(),
+          },
+          $unset: { failureCode: 1, failureReason: 1 },
+        }
+      );
+
+      if (payment.targetType === PaymentTargetType.APPOINTMENT) {
+        await Appointment.updateOne(
+          { _id: payment.targetId },
+          { $set: { paymentStatus: "REFUNDED" } }
+        );
+      }
+
+      // Patient Notification
+      try {
+        await Notification.create({
+          userId: payment.userId,
+          type: NotificationType.REFUND_PROCESSED,
+          title: "Refund Processed",
+          message: `Your refund of ${payment.currency} ${refundAmount} for appointment has been successfully processed.`,
+          relatedEntityType: "Payment",
+          relatedEntityId: payment._id,
+          metadata: {
+            appointmentId: payment.targetId.toString(),
+            refundId: providerRefund.id,
+            amount: refundAmount,
+            currency: payment.currency,
+            status: "processed",
+          },
+        });
+      } catch {}
+
+      // Socket.IO event
+      try {
+        const { io } = await import("../server.js");
+        if (io) {
+          io.to(`patient:${payment.userId}`).emit("payment:refunded", {
+            paymentId: payment._id.toString(),
+            appointmentId: payment.targetId.toString(),
+            refundId: providerRefund.id,
+            status: "REFUNDED",
+            amount: refundAmount,
+          });
+          io.emit("REFUND_COMPLETED", {
+            paymentId: payment._id.toString(),
+            refundId: providerRefund.id,
+            status: "REFUNDED",
+          });
+        }
+      } catch {}
+
+      // Audit Log
+      void auditLogService.log({
+        actorId: actor?.id || payment.userId,
+        actorRole: actor?.role || "SYSTEM",
+        action: AuditAction.PAYMENT_REFUND_ISSUED,
+        resourceType: "Payment",
+        resourceId: payment._id.toString(),
+        patientId: payment.userId,
+        status: "SUCCESS",
+        metadata: {
+          appointmentId: payment.targetId.toString(),
+          providerRefundId: providerRefund.id,
+          amount: refundAmount,
+          currency: payment.currency,
+          reason: cleanReason,
+          status: "REFUNDED",
+        },
+      });
+
+      return {
+        success: true,
+        status: "PROCESSED",
+        paymentId: payment._id.toString(),
+        refundId: providerRefund.id,
+        amount: refundAmount,
+        currency: payment.currency,
+      };
+    }
+
+    if (providerRefund?.status === "pending") {
+      await Payment.updateOne(
+        { _id: payment._id },
+        {
+          $set: {
+            status: PaymentStatus.REFUND_PENDING,
+            refundId: providerRefund.id,
+            refundAmount,
+            refundStatus: "pending",
+          },
+          $unset: { failureCode: 1, failureReason: 1 },
+        }
+      );
+
+      if (payment.targetType === PaymentTargetType.APPOINTMENT) {
+        await Appointment.updateOne(
+          { _id: payment.targetId },
+          { $set: { paymentStatus: "PENDING" } }
+        );
+      }
+
+      try {
+        await Notification.create({
+          userId: payment.userId,
+          type: NotificationType.REFUND_PROCESSED,
+          title: "Refund Initiated",
+          message: `Your refund of ${payment.currency} ${refundAmount} has been initiated and is pending provider settlement.`,
+          relatedEntityType: "Payment",
+          relatedEntityId: payment._id,
+          metadata: {
+            appointmentId: payment.targetId.toString(),
+            refundId: providerRefund.id,
+            amount: refundAmount,
+            status: "pending",
+          },
+        });
+      } catch {}
+
+      void auditLogService.log({
+        actorId: actor?.id || payment.userId,
+        actorRole: actor?.role || "SYSTEM",
+        action: AuditAction.PAYMENT_REFUND_ISSUED,
+        resourceType: "Payment",
+        resourceId: payment._id.toString(),
+        patientId: payment.userId,
+        status: "SUCCESS",
+        metadata: {
+          appointmentId: payment.targetId.toString(),
+          providerRefundId: providerRefund.id,
+          amount: refundAmount,
+          currency: payment.currency,
+          reason: cleanReason,
+          status: "PENDING",
+        },
+      });
+
+      return {
+        success: true,
+        status: "PENDING",
+        paymentId: payment._id.toString(),
+        refundId: providerRefund.id,
+        amount: refundAmount,
+        currency: payment.currency,
+        message: "Refund initiated and pending provider settlement",
+      };
+    }
+
+    // Status is 'failed' from provider
+    await Payment.updateOne(
+      { _id: payment._id },
+      {
+        $set: {
+          status: PaymentStatus.SUCCESS,
+          failureCode: "REFUND_REJECTED",
+          failureReason: "Provider declined refund request",
+          refundStatus: "failed",
+          refundId: providerRefund?.id,
+        },
+      }
+    );
+
+    void auditLogService.log({
+      actorId: actor?.id || payment.userId,
+      actorRole: actor?.role || "SYSTEM",
+      action: AuditAction.PAYMENT_REFUND_ISSUED,
+      resourceType: "Payment",
+      resourceId: payment._id.toString(),
+      patientId: payment.userId,
+      status: "FAILURE",
+      metadata: {
+        error: "Provider declined refund request",
+        amount: refundAmount,
+        reason: cleanReason,
+      },
+    });
+
+    throw new AppError(
+      500,
+      "PAYMENT_REFUND_FAILED",
+      "Provider declined refund request"
+    );
   }
 }
 

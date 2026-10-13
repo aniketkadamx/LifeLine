@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import mongoose from "mongoose";
 import { Appointment } from "../models/appointment.model.js";
 import { DoctorProfile } from "../models/doctor-profile.model.js";
+import { Payment } from "../models/payment.model.js";
+import { Notification } from "../models/notification.model.js";
 import {
   IdempotencyRecord,
   IdempotencyStatus,
@@ -12,11 +14,15 @@ import {
   UserStatus,
   UserRole,
   AuditAction,
+  PaymentStatus,
+  PaymentTargetType,
+  NotificationType,
   type IAppointment,
 } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
 import { auditLogService } from "./audit-log.service.js";
 import { availabilityService } from "./availability.service.js";
+import { paymentService } from "./payment.service.js";
 import type {
   CreateAppointmentInput,
   ListAppointmentsQuery,
@@ -930,11 +936,50 @@ export class AppointmentService {
       );
     }
 
-    // 5. Asynchronous audit logging
+    // 5. Automated refund if appointment was confirmed and paid
+    if (appointment.status === AppointmentStatus.CONFIRMED) {
+      let paymentRecord = null;
+      if (appointment.paymentId) {
+        paymentRecord = await Payment.findById(appointment.paymentId);
+      }
+      if (!paymentRecord) {
+        paymentRecord = await Payment.findOne({
+          targetType: PaymentTargetType.APPOINTMENT,
+          targetId: appointment._id,
+          status: { $in: [PaymentStatus.SUCCESS, PaymentStatus.REFUND_PENDING] },
+        });
+      }
+
+      if (paymentRecord && paymentRecord.status === PaymentStatus.SUCCESS) {
+        try {
+          const refundResult = await paymentService.processRefund(
+            paymentRecord._id.toString(),
+            paymentRecord.amount,
+            cancellationReason.trim(),
+            actor
+          );
+          if (refundResult.status === "PROCESSED") {
+            updated.paymentStatus = "REFUNDED";
+          } else if (refundResult.status === "PENDING") {
+            updated.paymentStatus = "PENDING";
+          }
+        } catch (refundErr: unknown) {
+          console.error(
+            `[AppointmentService] Automatic refund failed for cancelled appointment ${appointment._id}:`,
+            refundErr instanceof Error ? refundErr.message : refundErr
+          );
+        }
+      }
+    }
+
+    // 6. Asynchronous audit logging
     void auditLogService.log({
       actorId: actor.id,
       actorRole: actor.role as UserRole,
-      action: AuditAction.APPOINTMENT_CANCELLED,
+      action:
+        actor.role === UserRole.DOCTOR
+          ? AuditAction.APPOINTMENT_CANCELLED_BY_DOCTOR
+          : AuditAction.APPOINTMENT_CANCELLED,
       resourceType: "Appointment",
       resourceId: updated._id.toString(),
       ipAddress: clientContext?.ipAddress,
@@ -948,6 +993,228 @@ export class AppointmentService {
       },
       status: "SUCCESS",
     });
+
+    // 7. Real-time notifications
+    try {
+      const { io } = await import("../server.js");
+      if (io) {
+        io.to(`patient:${updated.patientId}`).emit("appointment:cancelled", {
+          appointmentId: updated._id.toString(),
+          status: AppointmentStatus.CANCELLED,
+          cancelledBy: actor.id,
+          reason: cancellationReason.trim(),
+        });
+        io.to(`doctor:${updated.doctorId}`).emit("appointment:cancelled", {
+          appointmentId: updated._id.toString(),
+          status: AppointmentStatus.CANCELLED,
+          cancelledBy: actor.id,
+          reason: cancellationReason.trim(),
+        });
+        io.emit("APPOINTMENT_CANCELLED", {
+          appointmentId: updated._id.toString(),
+          status: AppointmentStatus.CANCELLED,
+        });
+      }
+    } catch {}
+
+    return updated;
+  }
+
+  /**
+   * Rejects a scheduled appointment (Doctor or Admin) and initiates automated refund.
+   * Endpoint: PATCH /api/v1/appointments/:id/reject
+   * Source: docs/api/STATE_MACHINES.md Section 1.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+   */
+  async rejectAppointment(
+    appointmentId: string,
+    actor: AuthenticatedUser,
+    rejectionReason: string,
+    clientContext?: { ipAddress?: string; userAgent?: string }
+  ): Promise<IAppointment> {
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      throw AppError.badRequest(
+        "Invalid appointment identifier format",
+        "BAD_REQUEST"
+      );
+    }
+
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) {
+      throw new AppError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
+    }
+
+    // 1. Ownership authorization verification
+    if (actor.role === UserRole.DOCTOR) {
+      let isAssignedDoctor = appointment.doctorId.toString() === actor.id;
+      if (!isAssignedDoctor) {
+        const docProfile = await DoctorProfile.findOne({ userId: actor.id });
+        if (
+          docProfile &&
+          appointment.doctorId.toString() === docProfile._id.toString()
+        ) {
+          isAssignedDoctor = true;
+        }
+      }
+      if (!isAssignedDoctor) {
+        throw AppError.forbidden(
+          "Access denied: you are not the assigned doctor for this appointment",
+          "AUTH_RESOURCE_ACCESS_DENIED"
+        );
+      }
+    } else if (actor.role === UserRole.ADMIN) {
+      // Admin is explicitly permitted
+    } else {
+      throw AppError.forbidden(
+        "Access denied: role not permitted to reject appointments",
+        "AUTH_INSUFFICIENT_PERMISSIONS"
+      );
+    }
+
+    // 2. State machine validation: only CONFIRMED appointments can be rejected
+    if (appointment.status === AppointmentStatus.COMPLETED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_ALREADY_COMPLETED",
+        "Cannot reject an appointment that has already been completed"
+      );
+    }
+
+    if (
+      appointment.status === AppointmentStatus.CANCELLED ||
+      appointment.status === AppointmentStatus.REJECTED
+    ) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        `Appointment is already in terminal state '${appointment.status}'`
+      );
+    }
+
+    if (appointment.status !== AppointmentStatus.CONFIRMED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        `Cannot reject appointment with status '${appointment.status}'. Appointment must be in CONFIRMED state.`
+      );
+    }
+
+    // 3. Conditional atomic state transition in MongoDB
+    // By transitioning to REJECTED, the appointment is automatically excluded
+    // from the partial unique active-slot index { doctorId: 1, scheduledStart: 1 },
+    // atomically freeing the slot for new bookings.
+    const updated = await Appointment.findOneAndUpdate(
+      {
+        _id: appointment._id,
+        status: AppointmentStatus.CONFIRMED,
+        scheduledStart: appointment.scheduledStart,
+      },
+      {
+        $set: {
+          status: AppointmentStatus.REJECTED,
+          cancellation: {
+            reason: rejectionReason.trim(),
+            cancelledBy: new mongoose.Types.ObjectId(actor.id),
+            cancelledAt: new Date(),
+          },
+        },
+        $unset: { lockExpiresAt: 1 },
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        "Appointment status or schedule was modified concurrently"
+      );
+    }
+
+    // 4. Automated refund if appointment was paid
+    let paymentRecord = null;
+    if (appointment.paymentId) {
+      paymentRecord = await Payment.findById(appointment.paymentId);
+    }
+    if (!paymentRecord) {
+      paymentRecord = await Payment.findOne({
+        targetType: PaymentTargetType.APPOINTMENT,
+        targetId: appointment._id,
+        status: { $in: [PaymentStatus.SUCCESS, PaymentStatus.REFUND_PENDING] },
+      });
+    }
+
+    if (paymentRecord && paymentRecord.status === PaymentStatus.SUCCESS) {
+      try {
+        const refundResult = await paymentService.processRefund(
+          paymentRecord._id.toString(),
+          paymentRecord.amount,
+          rejectionReason.trim(),
+          actor
+        );
+        if (refundResult.status === "PROCESSED") {
+          updated.paymentStatus = "REFUNDED";
+        } else if (refundResult.status === "PENDING") {
+          updated.paymentStatus = "PENDING";
+        }
+      } catch (refundErr: unknown) {
+        console.error(
+          `[AppointmentService] Automatic refund failed for rejected appointment ${appointment._id}:`,
+          refundErr instanceof Error ? refundErr.message : refundErr
+        );
+      }
+    }
+
+    // 5. Patient notification
+    try {
+      await Notification.create({
+        userId: updated.patientId,
+        type: NotificationType.APPOINTMENT_CANCELLED,
+        title: "Appointment Declined by Doctor",
+        message: `Your appointment has been declined by the doctor. Reason: ${rejectionReason.trim()}`,
+        relatedEntityType: "Appointment",
+        relatedEntityId: updated._id,
+        metadata: {
+          appointmentId: updated._id.toString(),
+          doctorId: updated.doctorId.toString(),
+          reason: rejectionReason.trim(),
+        },
+      });
+    } catch {}
+
+    // 6. Asynchronous audit logging
+    void auditLogService.log({
+      actorId: actor.id,
+      actorRole: actor.role as UserRole,
+      action: AuditAction.APPOINTMENT_CANCELLED_BY_DOCTOR,
+      resourceType: "Appointment",
+      resourceId: updated._id.toString(),
+      ipAddress: clientContext?.ipAddress,
+      userAgent: clientContext?.userAgent,
+      metadata: {
+        doctorId: updated.doctorId.toString(),
+        patientId: updated.patientId.toString(),
+        scheduledStart: updated.scheduledStart.toISOString(),
+        rejectionReason: rejectionReason.trim(),
+        previousStatus: appointment.status,
+      },
+      status: "SUCCESS",
+    });
+
+    // 7. Real-time events
+    try {
+      const { io } = await import("../server.js");
+      if (io) {
+        io.to(`patient:${updated.patientId}`).emit("appointment:rejected", {
+          appointmentId: updated._id.toString(),
+          status: AppointmentStatus.REJECTED,
+          reason: rejectionReason.trim(),
+        });
+        io.emit("APPOINTMENT_CANCELLED", {
+          appointmentId: updated._id.toString(),
+          status: AppointmentStatus.REJECTED,
+        });
+      }
+    } catch {}
 
     return updated;
   }

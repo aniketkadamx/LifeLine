@@ -2,11 +2,16 @@ import { Router } from "express";
 import {
   createPaymentIntentHandler,
   handleRazorpayWebhookHandler,
+  processRefundHandler,
 } from "../controllers/payment.controller.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { authorizeRole } from "../middlewares/role.middleware.js";
-import { validateBody } from "../validators/auth.validator.js";
-import { createPaymentIntentSchema } from "../validators/payment.validator.js";
+import { validateBody, validateParams } from "../validators/auth.validator.js";
+import {
+  createPaymentIntentSchema,
+  paymentIdParamSchema,
+  processRefundSchema,
+} from "../validators/payment.validator.js";
 import { UserRole } from "../types/models.js";
 
 export const paymentRouter = Router();
@@ -34,4 +39,19 @@ paymentRouter.post(
 paymentRouter.post(
   "/webhook",
   handleRazorpayWebhookHandler
+);
+
+/**
+ * POST /api/v1/payments/:id/refund
+ * Processes refund for an eligible payment transaction.
+ * Role: ADMIN.
+ * Source: docs/api/AUTHORIZATION_MATRIX.md Section 6.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+ */
+paymentRouter.post(
+  "/:id/refund",
+  authenticate,
+  authorizeRole(UserRole.ADMIN),
+  validateParams(paymentIdParamSchema),
+  validateBody(processRefundSchema),
+  processRefundHandler
 );

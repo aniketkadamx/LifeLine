@@ -3,6 +3,7 @@ import {
   createAppointmentHandler,
   listAppointmentsHandler,
   cancelAppointmentHandler,
+  rejectAppointmentHandler,
   rescheduleAppointmentHandler,
 } from "../controllers/appointment.controller.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
@@ -18,6 +19,7 @@ import {
   listAppointmentsQuerySchema,
   appointmentIdParamSchema,
   cancelAppointmentSchema,
+  rejectAppointmentSchema,
   rescheduleAppointmentSchema,
 } from "../validators/appointment.validator.js";
 import { Appointment } from "../models/appointment.model.js";
@@ -118,6 +120,22 @@ appointmentRouter.patch(
   validateBody(cancelAppointmentSchema),
   authorizeOwnership(appointmentResourceFinder, appointmentOwnershipPredicate),
   cancelAppointmentHandler
+);
+
+/**
+ * PATCH /api/v1/appointments/:id/reject
+ * Reject a scheduled appointment (Doctor or Admin) and initiate automated refund.
+ * Roles: DOCTOR (assigned), ADMIN.
+ * Source: docs/api/STATE_MACHINES.md Section 1.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+ */
+appointmentRouter.patch(
+  "/:id/reject",
+  authenticate,
+  authorizeRole(UserRole.DOCTOR, UserRole.ADMIN),
+  validateParams(appointmentIdParamSchema),
+  validateBody(rejectAppointmentSchema),
+  authorizeOwnership(appointmentResourceFinder, appointmentOwnershipPredicate),
+  rejectAppointmentHandler
 );
 
 /**

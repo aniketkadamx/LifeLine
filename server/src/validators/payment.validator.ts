@@ -36,3 +36,37 @@ export const createPaymentIntentSchema = z
   });
 
 export type CreatePaymentIntentInput = z.infer<typeof createPaymentIntentSchema>;
+
+/**
+ * Zod validation schema for payment ID URL param.
+ */
+export const paymentIdParamSchema = z.object({
+  id: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-fA-F]{24}$/, "Invalid payment identifier format"),
+});
+
+export type PaymentIdParam = z.infer<typeof paymentIdParamSchema>;
+
+/**
+ * Zod validation schema for refund processing.
+ * Endpoint: POST /api/v1/payments/:id/refund
+ * Source: docs/api/AUTHORIZATION_MATRIX.md Section 6.1 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+ */
+export const processRefundSchema = z
+  .object({
+    amount: z
+      .number({ invalid_type_error: "Refund amount must be a number" })
+      .positive("Refund amount must be greater than zero")
+      .optional(),
+    reason: z
+      .string()
+      .trim()
+      .min(3, "Refund reason must be at least 3 characters long")
+      .max(500, "Refund reason cannot exceed 500 characters")
+      .optional(),
+  })
+  .strict();
+
+export type ProcessRefundInput = z.infer<typeof processRefundSchema>;

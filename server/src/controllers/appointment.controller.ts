@@ -8,6 +8,7 @@ import {
   type CreateAppointmentInput,
   type ListAppointmentsQuery,
   type CancelAppointmentInput,
+  type RejectAppointmentInput,
   type RescheduleAppointmentInput,
 } from "../validators/appointment.validator.js";
 
@@ -184,6 +185,41 @@ export async function rescheduleAppointmentHandler(
     );
 
     sendSuccess(res, updated, "Appointment rescheduled successfully", 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Handler: PATCH /api/v1/appointments/:id/reject
+ *
+ * Rejects a scheduled appointment (Doctor or Admin) and initiates automated refund.
+ * Roles: DOCTOR (assigned), ADMIN.
+ * Source: docs/api/STATE_MACHINES.md Section 1.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+ */
+export async function rejectAppointmentHandler(
+  req: Request<{ id: string }, unknown, RejectAppointmentInput>,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user || !req.user.id) {
+      throw AppError.unauthorized("Authentication required", "AUTH_TOKEN_MISSING");
+    }
+
+    const ipAddress = (req.headers["x-test-client-ip"] as string) || req.ip;
+    const userAgent = req.headers["user-agent"];
+    const rejectionReason =
+      req.body.rejectionReason || req.body.reason || "Declined by doctor";
+
+    const updated = await appointmentService.rejectAppointment(
+      req.params.id,
+      req.user,
+      rejectionReason,
+      { ipAddress, userAgent }
+    );
+
+    sendSuccess(res, updated, "Appointment rejected successfully", 200);
   } catch (error) {
     next(error);
   }

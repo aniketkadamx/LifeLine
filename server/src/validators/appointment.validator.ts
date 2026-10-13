@@ -124,6 +124,34 @@ export const cancelAppointmentSchema = z
 export type CancelAppointmentInput = z.infer<typeof cancelAppointmentSchema>;
 
 /**
+ * Zod validation schema for doctor appointment rejection.
+ * Endpoint: PATCH /api/v1/appointments/:id/reject
+ * Source: docs/api/STATE_MACHINES.md Section 1.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.3.
+ */
+export const rejectAppointmentSchema = z
+  .object({
+    rejectionReason: z
+      .string()
+      .trim()
+      .min(5, "Rejection reason must be at least 5 characters long")
+      .max(500, "Rejection reason cannot exceed 500 characters")
+      .optional(),
+    reason: z
+      .string()
+      .trim()
+      .min(5, "Reason must be at least 5 characters long")
+      .max(500, "Reason cannot exceed 500 characters")
+      .optional(),
+  })
+  .strict()
+  .refine((data) => Boolean(data.rejectionReason || data.reason), {
+    message: "Rejection reason is required and must be at least 5 characters long",
+    path: ["rejectionReason"],
+  });
+
+export type RejectAppointmentInput = z.infer<typeof rejectAppointmentSchema>;
+
+/**
  * Zod validation schema for appointment rescheduling.
  * Endpoint: PATCH /api/v1/appointments/:id/reschedule
  * Source: docs/api/API_CONTRACT.md & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
