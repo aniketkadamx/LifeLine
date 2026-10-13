@@ -37,7 +37,7 @@ export const MIME_TO_EXTENSION_MAP: Record<AllowedMimeType, string> = {
  * Format: records/<uuid>.<ext>
  */
 export const STORAGE_KEY_REGEX =
-  /^records\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pdf|png|jpg|dcm)$/;
+  /^records\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pdf|png|jpg|jpeg|dcm)$/;
 
 /**
  * Request validation schema for generating a pre-signed object storage upload URL.

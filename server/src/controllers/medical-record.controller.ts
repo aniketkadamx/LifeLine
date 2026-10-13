@@ -86,9 +86,11 @@ export async function getDownloadUrlHandler(
     const { id } = req.params;
     const result = await medicalRecordService.getDownloadUrl(req.user, id);
 
-    // Ensure temporary pre-signed URL is never cached by proxies or browsers
-    res.set("Cache-Control", "no-store, private");
+    // Ensure temporary pre-signed URL is never cached by proxies, CDNs, or browsers
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
     res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    res.set("Surrogate-Control", "no-store");
 
     sendSuccess(res, result, "Download URL generated successfully", 200);
   } catch (error) {

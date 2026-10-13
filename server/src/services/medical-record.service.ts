@@ -25,6 +25,7 @@ import {
   AuditAction,
   UserRole,
   AppointmentStatus,
+  ConsultationStatus,
   type IMedicalRecord,
 } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
@@ -205,7 +206,11 @@ export class MedicalRecordService {
     // Verify file extension consistency between storageKey and verified MIME type
     const expectedExtension =
       MIME_TO_EXTENSION_MAP[objectMetadata.contentType as AllowedMimeType];
-    if (expectedExtension && !input.storageKey.endsWith(expectedExtension)) {
+    const matchesExtension =
+      (expectedExtension && input.storageKey.endsWith(expectedExtension)) ||
+      (objectMetadata.contentType === "image/jpeg" && input.storageKey.endsWith(".jpeg"));
+
+    if (!matchesExtension) {
       throw new AppError(
         422,
         "VALIDATION_ERROR",
@@ -214,21 +219,33 @@ export class MedicalRecordService {
     }
 
     // 4. Persist MedicalRecord with Authoritative Verified Properties
-    const record = await MedicalRecord.create({
-      patientId: new mongoose.Types.ObjectId(user.id),
-      uploadedBy: new mongoose.Types.ObjectId(user.id),
-      title: input.title.trim(),
-      description: input.description?.trim(),
-      recordType: input.recordType,
-      recordDate: input.recordDate ? new Date(input.recordDate) : new Date(),
-      storageKey: input.storageKey,
-      fileName: input.fileName?.trim() || input.title.trim(),
-      fileType: objectMetadata.contentType, // Authoritative from S3
-      sizeBytes: objectMetadata.contentLength, // Authoritative from S3
-      relatedAppointmentId: input.relatedAppointmentId
-        ? new mongoose.Types.ObjectId(input.relatedAppointmentId)
-        : undefined,
-    });
+    let record: IMedicalRecord;
+    try {
+      record = await MedicalRecord.create({
+        patientId: new mongoose.Types.ObjectId(user.id),
+        uploadedBy: new mongoose.Types.ObjectId(user.id),
+        title: input.title.trim(),
+        description: input.description?.trim(),
+        recordType: input.recordType,
+        recordDate: input.recordDate ? new Date(input.recordDate) : new Date(),
+        storageKey: input.storageKey,
+        fileName: input.fileName?.trim() || input.title.trim(),
+        fileType: objectMetadata.contentType, // Authoritative from S3
+        sizeBytes: objectMetadata.contentLength, // Authoritative from S3
+        relatedAppointmentId: input.relatedAppointmentId
+          ? new mongoose.Types.ObjectId(input.relatedAppointmentId)
+          : undefined,
+      });
+    } catch (dbError: any) {
+      if (dbError?.code === 11000) {
+        throw new AppError(
+          409,
+          "RESOURCE_CONFLICT",
+          "A medical record has already been registered for this storage object"
+        );
+      }
+      throw dbError;
+    }
 
     // 5. Audit Log Entry
     void auditLogService.log({
@@ -256,7 +273,7 @@ export class MedicalRecordService {
    * Zero-Trust Authorization (AUTHORIZATION_MATRIX.md Section 4):
    * 1. Patient Owner: Permitted only if `user.id === record.patientId`.
    * 2. Attending Doctor: Permitted only if doctor has an active clinical relationship
-   *    (CONFIRMED, IN_PROGRESS, or COMPLETED appointment or consultation with this patient).
+   *    (CONFIRMED, IN_PROGRESS, or COMPLETED appointment or active consultation with this patient).
    * 3. Administrator: Permitted for compliance/supervision with audit logging.
    * 4. Unassigned doctors, unrelated patients, or pharmacy roles: Rejected with HTTP 403 Forbidden.
    * 5. Record state check: Archived records rejected with HTTP 404 Not Found.
@@ -297,7 +314,7 @@ export class MedicalRecordService {
       if (hasRelationship) {
         isAuthorizedDoctor = true;
       } else {
-        // Also verify any active appointment or consultation directly
+        // Also verify any active appointment directly
         const activeAppointment = await Appointment.exists({
           doctorId: new mongoose.Types.ObjectId(user.id),
           patientId: record.patientId,
@@ -310,12 +327,34 @@ export class MedicalRecordService {
           },
         });
 
-        const activeConsultation = await Consultation.exists({
-          doctorId: new mongoose.Types.ObjectId(user.id),
-          patientId: record.patientId,
-        });
+        if (activeAppointment) {
+          isAuthorizedDoctor = true;
+        } else {
+          // If checking via consultation, ensure consultation status is active/completed
+          // and parent appointment is not cancelled or rejected
+          const consultations = await Consultation.find({
+            doctorId: new mongoose.Types.ObjectId(user.id),
+            patientId: record.patientId,
+            status: {
+              $in: [
+                ConsultationStatus.ROOM_OPENED,
+                ConsultationStatus.IN_CONSULTATION,
+                ConsultationStatus.COMPLETED,
+              ],
+            },
+          }).select("appointmentId");
 
-        isAuthorizedDoctor = Boolean(activeAppointment || activeConsultation);
+          if (consultations.length > 0) {
+            const appointmentIds = consultations.map((c) => c.appointmentId);
+            const validParentAppointment = await Appointment.exists({
+              _id: { $in: appointmentIds },
+              status: {
+                $nin: [AppointmentStatus.CANCELLED, AppointmentStatus.REJECTED],
+              },
+            });
+            isAuthorizedDoctor = Boolean(validParentAppointment);
+          }
+        }
       }
     }
 

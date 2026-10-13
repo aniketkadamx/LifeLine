@@ -123,23 +123,23 @@ export function getStorageCredentials(): StorageCredentials {
   const bucket =
     customCredentials?.bucket !== undefined
       ? customCredentials.bucket
-      : process.env.STORAGE_BUCKET || env.STORAGE_BUCKET;
+      : process.env.STORAGE_BUCKET || env.STORAGE_BUCKET || process.env.S3_BUCKET_NAME;
   const region =
     customCredentials?.region !== undefined
       ? customCredentials.region
-      : process.env.STORAGE_REGION || env.STORAGE_REGION;
+      : process.env.STORAGE_REGION || env.STORAGE_REGION || process.env.AWS_REGION;
   const accessKeyId =
     customCredentials?.accessKeyId !== undefined
       ? customCredentials.accessKeyId
-      : process.env.STORAGE_ACCESS_KEY || env.STORAGE_ACCESS_KEY;
+      : process.env.STORAGE_ACCESS_KEY || env.STORAGE_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey =
     customCredentials?.secretAccessKey !== undefined
       ? customCredentials.secretAccessKey
-      : process.env.STORAGE_SECRET_KEY || env.STORAGE_SECRET_KEY;
+      : process.env.STORAGE_SECRET_KEY || env.STORAGE_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
   const endpoint =
     customCredentials?.endpoint !== undefined
       ? customCredentials.endpoint
-      : process.env.STORAGE_ENDPOINT || env.STORAGE_ENDPOINT;
+      : process.env.STORAGE_ENDPOINT || env.STORAGE_ENDPOINT || process.env.AWS_ENDPOINT_URL;
   const forcePathStyle =
     customCredentials?.forcePathStyle !== undefined
       ? customCredentials.forcePathStyle
@@ -149,7 +149,7 @@ export function getStorageCredentials(): StorageCredentials {
     throw new AppError(
       503,
       "STORAGE_CONFIG_ERROR",
-      "Object storage provider configuration is incomplete: STORAGE_BUCKET, STORAGE_REGION, STORAGE_ACCESS_KEY, and STORAGE_SECRET_KEY must be configured"
+      "Object storage provider configuration is incomplete: STORAGE_BUCKET (or S3_BUCKET_NAME), STORAGE_REGION (or AWS_REGION), STORAGE_ACCESS_KEY (or AWS_ACCESS_KEY_ID), and STORAGE_SECRET_KEY (or AWS_SECRET_ACCESS_KEY) must be configured"
     );
   }
 

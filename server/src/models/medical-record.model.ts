@@ -80,6 +80,7 @@ const medicalRecordSchema = new Schema<IMedicalRecord>(
   }
 );
 
+medicalRecordSchema.index({ storageKey: 1 }, { unique: true });
 medicalRecordSchema.index({ patientId: 1, recordDate: -1 });
 medicalRecordSchema.index({ patientId: 1, recordType: 1 });
 

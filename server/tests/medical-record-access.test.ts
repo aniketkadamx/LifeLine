@@ -8,6 +8,7 @@ import {
   DoctorProfile,
   PatientProfile,
   Appointment,
+  Consultation,
   MedicalRecord,
   AuditLog,
 } from "../src/models/index.js";
@@ -16,6 +17,7 @@ import {
   UserStatus,
   DoctorVerificationStatus,
   AppointmentStatus,
+  ConsultationStatus,
   ConsultationType,
   MedicalRecordType,
   AuditAction,
@@ -25,6 +27,7 @@ import {
   setStorageCredentials,
   setS3Client,
   setMockObjectMetadata,
+  getStorageCredentials,
 } from "../src/integrations/storage/s3.client.js";
 import { AppError } from "../src/utils/api-error.js";
 
@@ -727,15 +730,106 @@ describe("Milestone 9 - Task 9.2: Medical Record Metadata & 15-Minute Expiring D
       expect(res.body.error.message).not.toContain(TEST_STORAGE_CONFIG.secretAccessKey);
     });
 
-    it("20. Cache-Control headers prevent public caching of download URLs", async () => {
+    it("20. Cache-Control and anti-cache headers prevent public caching of download URLs", async () => {
       const res = await request(app)
         .get(`/api/v1/medical-records/${testRecord._id}/download-url`)
         .set("Authorization", `Bearer ${patientToken}`)
         .expect(200);
 
       expect(res.headers["cache-control"]).toContain("no-store");
+      expect(res.headers["cache-control"]).toContain("no-cache");
+      expect(res.headers["cache-control"]).toContain("must-revalidate");
       expect(res.headers["cache-control"]).toContain("private");
       expect(res.headers["pragma"]).toBe("no-cache");
+      expect(res.headers["expires"]).toBe("0");
+      expect(res.headers["surrogate-control"]).toBe("no-store");
+    });
+
+    it("21. Storage configuration resolves fallback AWS SDK environment variables consistently", () => {
+      setStorageCredentials(null); // Reset custom credentials
+      const origS3Bucket = process.env.S3_BUCKET_NAME;
+      const origAwsRegion = process.env.AWS_REGION;
+      const origAwsKey = process.env.AWS_ACCESS_KEY_ID;
+      const origAwsSecret = process.env.AWS_SECRET_ACCESS_KEY;
+
+      try {
+        delete process.env.STORAGE_BUCKET;
+        delete process.env.STORAGE_REGION;
+        delete process.env.STORAGE_ACCESS_KEY;
+        delete process.env.STORAGE_SECRET_KEY;
+
+        process.env.S3_BUCKET_NAME = "aws-fallback-bucket";
+        process.env.AWS_REGION = "eu-west-1";
+        process.env.AWS_ACCESS_KEY_ID = "FALLBACK_KEY_ID";
+        process.env.AWS_SECRET_ACCESS_KEY = "FALLBACK_SECRET_KEY";
+
+        const creds = getStorageCredentials();
+        expect(creds.bucket).toBe("aws-fallback-bucket");
+        expect(creds.region).toBe("eu-west-1");
+        expect(creds.accessKeyId).toBe("FALLBACK_KEY_ID");
+        expect(creds.secretAccessKey).toBe("FALLBACK_SECRET_KEY");
+      } finally {
+        // Restore
+        if (origS3Bucket !== undefined) process.env.S3_BUCKET_NAME = origS3Bucket; else delete process.env.S3_BUCKET_NAME;
+        if (origAwsRegion !== undefined) process.env.AWS_REGION = origAwsRegion; else delete process.env.AWS_REGION;
+        if (origAwsKey !== undefined) process.env.AWS_ACCESS_KEY_ID = origAwsKey; else delete process.env.AWS_ACCESS_KEY_ID;
+        if (origAwsSecret !== undefined) process.env.AWS_SECRET_ACCESS_KEY = origAwsSecret; else delete process.env.AWS_SECRET_ACCESS_KEY;
+        setStorageCredentials(TEST_STORAGE_CONFIG);
+      }
+    });
+
+    it("22. Metadata registration supports .jpeg file extension matching image/jpeg content type", async () => {
+      const jpegKey = "records/00000000-0000-4000-8000-000000000099.jpeg";
+      setMockObjectMetadata((key) => {
+        if (key === jpegKey) {
+          return {
+            contentLength: 50000,
+            contentType: "image/jpeg",
+          };
+        }
+        return {
+          contentLength: 1024,
+          contentType: "application/pdf",
+        };
+      });
+
+      const res = await request(app)
+        .post("/api/v1/medical-records")
+        .set("Authorization", `Bearer ${patientToken}`)
+        .send({
+          title: "Skin Rash JPEG Photo",
+          recordType: MedicalRecordType.OTHER,
+          storageKey: jpegKey,
+        })
+        .expect(201);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.fileType).toBe("image/jpeg");
+    });
+
+    it("23. Doctor cannot download record if consultation is tied to a cancelled appointment", async () => {
+      const cancelledAppointment = await establishClinicalRelationship(
+        unassignedDoctorUser._id,
+        patientUser._id,
+        AppointmentStatus.CANCELLED
+      );
+
+      await Consultation.create({
+        appointmentId: cancelledAppointment._id,
+        patientId: patientUser._id,
+        doctorId: unassignedDoctorUser._id,
+        consultationType: ConsultationType.VIDEO,
+        status: ConsultationStatus.ROOM_OPENED,
+        roomId: "room_cancelled_apt_123",
+      });
+
+      const res = await request(app)
+        .get(`/api/v1/medical-records/${testRecord._id}/download-url`)
+        .set("Authorization", `Bearer ${unassignedDoctorToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe("AUTH_RESOURCE_ACCESS_DENIED");
     });
   });
 });
