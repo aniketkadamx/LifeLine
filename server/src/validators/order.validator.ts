@@ -98,3 +98,89 @@ export const createOrderSchema = z
   .strict();
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+
+/**
+ * Route parameter validation schema for order identifier.
+ */
+export const orderIdParamSchema = z.object({
+  id: z
+    .string({ required_error: "Order ID is required" })
+    .trim()
+    .refine(
+      (val) => mongoose.Types.ObjectId.isValid(val),
+      "Order identifier must be a valid 24-character hex ObjectId"
+    ),
+});
+
+export type OrderIdParam = z.infer<typeof orderIdParamSchema>;
+
+/**
+ * Request body validation schema for pharmacist prescription review.
+ * Source: docs/api/API_CONTRACT.md Group 12.2.
+ */
+export const prescriptionReviewSchema = z
+  .object({
+    decision: z.enum(["APPROVE", "REJECT"], {
+      errorMap: () => ({
+        message: "Decision must be either 'APPROVE' or 'REJECT'",
+      }),
+    }),
+    rejectionReason: z
+      .string()
+      .trim()
+      .min(1, "Rejection reason cannot be empty")
+      .max(500, "Rejection reason cannot exceed 500 characters")
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (data) =>
+      data.decision !== "REJECT" ||
+      (Boolean(data.rejectionReason) && data.rejectionReason!.length > 0),
+    {
+      message: "Rejection reason is required when rejecting a prescription",
+      path: ["rejectionReason"],
+    }
+  );
+
+export type PrescriptionReviewInput = z.infer<typeof prescriptionReviewSchema>;
+
+/**
+ * Request body validation schema for updating order delivery state.
+ * Source: docs/api/API_CONTRACT.md Group 12.3.
+ */
+export const updateOrderStatusSchema = z
+  .object({
+    status: z.enum(
+      [
+        "PREPARING",
+        "READY_FOR_DELIVERY",
+        "OUT_FOR_DELIVERY",
+        "DELIVERED",
+      ],
+      {
+        errorMap: () => ({
+          message:
+            "Status must be one of: PREPARING, READY_FOR_DELIVERY, OUT_FOR_DELIVERY, DELIVERED",
+        }),
+      }
+    ),
+    deliveryOtp: z
+      .string()
+      .trim()
+      .min(4, "Delivery OTP must be at least 4 digits")
+      .max(10, "Delivery OTP cannot exceed 10 digits")
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (data) =>
+      data.status !== "DELIVERED" ||
+      (Boolean(data.deliveryOtp) && data.deliveryOtp!.length > 0),
+    {
+      message: "deliveryOtp is required when confirming order delivery",
+      path: ["deliveryOtp"],
+    }
+  );
+
+export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;

@@ -609,6 +609,7 @@ export enum NotificationType {
   ORDER_STATUS_UPDATED = "ORDER_STATUS_UPDATED",
   ORDER_DELIVERED = "ORDER_DELIVERED",
   ORDER_CANCELLED = "ORDER_CANCELLED",
+  ORDER_REJECTED = "ORDER_REJECTED",
   PAYMENT_SUCCESS = "PAYMENT_SUCCESS",
   PAYMENT_FAILED = "PAYMENT_FAILED",
   REFUND_PROCESSED = "REFUND_PROCESSED",
@@ -748,14 +749,19 @@ export interface IOrder {
   items: IOrderItemSnapshot[];
   prescriptionId?: Types.ObjectId;
   paymentId?: Types.ObjectId | string;
-  paymentStatus: "UNPAID" | "PENDING" | "PAID" | "REFUNDED";
+  paymentStatus: "UNPAID" | "PENDING" | "PAID" | "REFUNDED" | "REFUND_PENDING";
   status: OrderStatus;
   deliveryAddress: IAddress;
   totals: IOrderTotals;
   currency: string;
   deliveryOtp?: string; // Private verification code
+  deliveryOtpExpiresAt?: Date;
+  deliveryOtpAttempts?: number;
+  stockReleased?: boolean;
+  stockConsumed?: boolean;
   deliveryNotes?: string;
   prescriptionReview?: IOrderPrescriptionReview;
+  deliveredAt?: Date;
   cancelledAt?: Date;
   cancellationReason?: string;
   createdAt: Date;

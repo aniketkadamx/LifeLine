@@ -168,7 +168,7 @@ const orderSchema = new Schema<IOrder>(
     },
     paymentStatus: {
       type: String,
-      enum: ["UNPAID", "PENDING", "PAID", "REFUNDED"],
+      enum: ["UNPAID", "PENDING", "PAID", "REFUNDED", "REFUND_PENDING"],
       default: "UNPAID",
       required: true,
     },
@@ -199,12 +199,34 @@ const orderSchema = new Schema<IOrder>(
       trim: true,
       private: true,
     },
+    deliveryOtpExpiresAt: {
+      type: Date,
+      private: true,
+    },
+    deliveryOtpAttempts: {
+      type: Number,
+      default: 0,
+      private: true,
+    },
+    stockReleased: {
+      type: Boolean,
+      default: false,
+      private: true,
+    },
+    stockConsumed: {
+      type: Boolean,
+      default: false,
+      private: true,
+    },
     deliveryNotes: {
       type: String,
       trim: true,
     },
     prescriptionReview: {
       type: orderPrescriptionReviewSchema,
+    },
+    deliveredAt: {
+      type: Date,
     },
     cancelledAt: {
       type: Date,
