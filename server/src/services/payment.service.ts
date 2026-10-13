@@ -7,6 +7,7 @@ import {
   PaymentStatus,
   PaymentTargetType,
   PaymentProvider,
+  AuditAction,
   type IPayment,
 } from "../types/models.js";
 import type { AuthenticatedUser } from "../types/express.js";
@@ -14,7 +15,9 @@ import { AppError } from "../utils/api-error.js";
 import {
   getRazorpayClient,
   getRazorpayPublicKey,
+  verifyRazorpayWebhookSignature,
 } from "../integrations/payment/razorpay.client.js";
+import { auditLogService } from "./audit-log.service.js";
 import type { CreatePaymentIntentInput } from "../validators/payment.validator.js";
 
 /**
@@ -27,6 +30,19 @@ export interface PaymentIntentResult {
   currency: string;
   keyId: string;
   referenceId: string;
+}
+
+/**
+ * Result data returned after processing a webhook event.
+ */
+export interface WebhookProcessingResult {
+  acknowledged: boolean;
+  event?: string;
+  status: "SETTLED" | "ALREADY_SETTLED" | "IGNORED";
+  paymentId?: string;
+  appointmentId?: string;
+  orderId?: string;
+  message?: string;
 }
 
 /**
@@ -275,6 +291,304 @@ export class PaymentService {
       currency,
       keyId: getRazorpayPublicKey(),
       referenceId: payment.referenceId,
+    };
+  }
+
+  /**
+   * Processes an incoming Razorpay webhook delivery with cryptographic signature verification
+   * and atomic settlement.
+   *
+   * @param rawBody Raw HTTP request buffer
+   * @param signature Razorpay signature from X-Razorpay-Signature header
+   */
+  async handleRazorpayWebhook(
+    rawBody: Buffer,
+    signature: string | undefined | null
+  ): Promise<WebhookProcessingResult> {
+    // 1. Cryptographic HMAC-SHA256 signature verification
+    const isSignatureValid = verifyRazorpayWebhookSignature(rawBody, signature);
+    if (!isSignatureValid) {
+      throw AppError.unauthorized(
+        "Invalid webhook signature",
+        "INVALID_WEBHOOK_SIGNATURE"
+      );
+    }
+
+    // 2. Parse payload safely
+    let payload: any;
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      throw AppError.badRequest(
+        "Malformed JSON payload in webhook delivery",
+        "INVALID_PAYLOAD"
+      );
+    }
+
+    const event = payload?.event;
+    if (event !== "payment.captured") {
+      // Unrelated valid event acknowledged without side effects
+      return {
+        acknowledged: true,
+        event,
+        status: "IGNORED",
+        message: `Webhook event '${event}' acknowledged without settlement`,
+      };
+    }
+
+    // 3. Extract captured payment details
+    const paymentEntity = payload?.payload?.payment?.entity;
+    if (!paymentEntity || !paymentEntity.order_id || !paymentEntity.id) {
+      throw AppError.badRequest(
+        "Missing payment entity or order_id in webhook payload",
+        "INVALID_PAYLOAD"
+      );
+    }
+
+    const razorpayOrderId = paymentEntity.order_id;
+    const razorpayPaymentId = paymentEntity.id;
+    const capturedAmount = paymentEntity.amount;
+    const capturedCurrency = paymentEntity.currency?.toUpperCase()?.trim();
+
+    // 4. Match local Payment document by providerOrderId
+    const payment = await Payment.findOne({ providerOrderId: razorpayOrderId });
+    if (!payment) {
+      throw new AppError(
+        404,
+        "PAYMENT_NOT_FOUND",
+        `Payment record not found for provider order ID ${razorpayOrderId}`
+      );
+    }
+
+    // 5. Idempotent check: duplicate delivery for already settled payment
+    if (payment.status === PaymentStatus.SUCCESS) {
+      return {
+        acknowledged: true,
+        event,
+        status: "ALREADY_SETTLED",
+        paymentId: payment._id.toString(),
+        appointmentId: payment.targetId.toString(),
+        orderId: razorpayOrderId,
+        message: "Payment order has already been settled",
+      };
+    }
+
+    if (
+      payment.status !== PaymentStatus.CREATED &&
+      payment.status !== PaymentStatus.PENDING_GATEWAY
+    ) {
+      throw new AppError(
+        409,
+        "PAYMENT_INVALID_TRANSITION",
+        `Cannot settle payment with status '${payment.status}'`
+      );
+    }
+
+    // 6. Verify amount and currency match trusted server payment intent
+    const expectedSubunits = convertToSmallestCurrencyUnit(
+      payment.amount,
+      payment.currency
+    );
+
+    if (
+      Number(capturedAmount) !== expectedSubunits ||
+      capturedCurrency !== payment.currency
+    ) {
+      throw new AppError(
+        400,
+        "PAYMENT_AMOUNT_MISMATCH",
+        "Captured payment amount or currency does not match payment intent"
+      );
+    }
+
+    // 7. Load target appointment and verify eligibility
+    const appointment = await Appointment.findById(payment.targetId);
+    if (!appointment) {
+      throw new AppError(
+        404,
+        "APPOINTMENT_NOT_FOUND",
+        "Associated appointment not found"
+      );
+    }
+
+    if (appointment.status !== AppointmentStatus.PENDING_PAYMENT) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        `Cannot confirm appointment with status '${appointment.status}'. Appointment must be in PENDING_PAYMENT.`
+      );
+    }
+
+    if (
+      appointment.lockExpiresAt &&
+      appointment.lockExpiresAt.getTime() < Date.now()
+    ) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        "Cannot confirm an expired appointment reservation lock"
+      );
+    }
+
+    // 8. Atomic Settlement: use native MongoDB transactions if replica set is active,
+    // or conditional updates with compensating rollback on standalone MongoDB.
+    let isReplicaSet = false;
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const client = mongoose.connection.getClient();
+        const topology = (
+          client as unknown as {
+            topology?: { description?: { type?: string; setName?: string } };
+          }
+        )?.topology?.description;
+
+        isReplicaSet =
+          topology?.type === "ReplicaSetWithPrimary" ||
+          topology?.type === "Sharded" ||
+          Boolean(topology?.setName);
+      } catch {
+        isReplicaSet = false;
+      }
+    }
+
+    let session: mongoose.ClientSession | undefined = undefined;
+    if (isReplicaSet) {
+      try {
+        session = await mongoose.startSession();
+        session.startTransaction();
+      } catch {
+        session = undefined;
+      }
+    }
+
+    let updatedPayment: IPayment | null = null;
+    try {
+      updatedPayment = await Payment.findOneAndUpdate(
+        {
+          _id: payment._id,
+          status: payment.status,
+        },
+        {
+          $set: {
+            status: PaymentStatus.SUCCESS,
+            providerPaymentId: razorpayPaymentId,
+            ...(signature ? { providerSignature: signature } : {}),
+            gatewayMetadata: paymentEntity,
+          },
+        },
+        { new: true, ...(session ? { session } : {}) }
+      );
+
+      if (!updatedPayment) {
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
+        }
+        return {
+          acknowledged: true,
+          event,
+          status: "ALREADY_SETTLED",
+          paymentId: payment._id.toString(),
+          appointmentId: appointment._id.toString(),
+          orderId: razorpayOrderId,
+          message: "Payment order settled concurrently",
+        };
+      }
+
+      const updatedAppointment = await Appointment.findOneAndUpdate(
+        {
+          _id: appointment._id,
+          status: AppointmentStatus.PENDING_PAYMENT,
+        },
+        {
+          $set: {
+            status: AppointmentStatus.CONFIRMED,
+            paymentStatus: "PAID",
+            paymentId: payment._id,
+          },
+          $unset: { lockExpiresAt: 1 },
+        },
+        { new: true, ...(session ? { session } : {}) }
+      );
+
+      if (!updatedAppointment) {
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
+        } else {
+          // Compensating rollback for standalone deployment
+          await Payment.updateOne(
+            { _id: payment._id },
+            {
+              $set: { status: payment.status },
+              $unset: { providerPaymentId: 1, providerSignature: 1 },
+            }
+          );
+        }
+        throw new AppError(
+          409,
+          "APPOINTMENT_INVALID_TRANSITION",
+          "Appointment status modified concurrently; cannot be confirmed"
+        );
+      }
+
+      if (session && session.inTransaction()) {
+        await session.commitTransaction();
+      }
+    } catch (err: unknown) {
+      if (session && session.inTransaction()) {
+        await session.abortTransaction();
+      }
+      throw err;
+    } finally {
+      if (session) {
+        await session.endSession();
+      }
+    }
+
+    // 9. Post-commit side effects: real-time events & audit logging
+    try {
+      const { io } = await import("../server.js");
+      if (io) {
+        io.to(`patient:${appointment.patientId}`).emit("appointment:confirmed", {
+          appointmentId: appointment._id.toString(),
+          status: AppointmentStatus.CONFIRMED,
+          paymentId: payment._id.toString(),
+        });
+        io.to(`doctor:${appointment.doctorId}`).emit("appointment:confirmed", {
+          appointmentId: appointment._id.toString(),
+          status: AppointmentStatus.CONFIRMED,
+          paymentId: payment._id.toString(),
+        });
+        io.emit("APPOINTMENT_CONFIRMED", {
+          appointmentId: appointment._id.toString(),
+          status: AppointmentStatus.CONFIRMED,
+          paymentId: payment._id.toString(),
+        });
+      }
+    } catch {
+      // In decoupled test environments, ignore if io is not bound
+    }
+
+    void auditLogService.log({
+      actorRole: "SYSTEM",
+      action: AuditAction.PAYMENT_VERIFIED,
+      resourceType: "Payment",
+      resourceId: payment._id.toString(),
+      metadata: {
+        appointmentId: appointment._id.toString(),
+        providerOrderId: razorpayOrderId,
+        providerPaymentId: razorpayPaymentId,
+        amount: payment.amount,
+      },
+      status: "SUCCESS",
+    });
+
+    return {
+      acknowledged: true,
+      event,
+      status: "SETTLED",
+      paymentId: payment._id.toString(),
+      appointmentId: appointment._id.toString(),
+      orderId: razorpayOrderId,
     };
   }
 }

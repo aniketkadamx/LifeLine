@@ -1,5 +1,8 @@
 import { Router } from "express";
-import { createPaymentIntentHandler } from "../controllers/payment.controller.js";
+import {
+  createPaymentIntentHandler,
+  handleRazorpayWebhookHandler,
+} from "../controllers/payment.controller.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { authorizeRole } from "../middlewares/role.middleware.js";
 import { validateBody } from "../validators/auth.validator.js";
@@ -20,4 +23,15 @@ paymentRouter.post(
   authorizeRole(UserRole.PATIENT),
   validateBody(createPaymentIntentSchema),
   createPaymentIntentHandler
+);
+
+/**
+ * POST /api/v1/payments/webhook
+ * Cryptographic Razorpay webhook listener for asynchronous capture settlement.
+ * Role: Provider callback (authenticates via HMAC-SHA256 signature, no user JWT required).
+ * Source: docs/api/API_CONTRACT.md Group 13.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.2.
+ */
+paymentRouter.post(
+  "/webhook",
+  handleRazorpayWebhookHandler
 );

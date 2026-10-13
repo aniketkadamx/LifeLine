@@ -22,8 +22,20 @@ app.use(corsMiddleware);
 // Global API Rate Limiter (100 req/min)
 app.use(globalLimiter);
 
-// Request Parsing Middleware
-app.use(express.json());
+// Provider Webhooks: Parse raw byte buffer for cryptographic HMAC verification
+app.use(
+  "/api/v1/payments/webhook",
+  express.raw({ type: "*/*" })
+);
+
+// Request Parsing Middleware for standard application routes
+app.use(
+  express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 

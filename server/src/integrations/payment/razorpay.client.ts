@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import Razorpay from "razorpay";
 import { env } from "../../config/env.js";
 import { AppError } from "../../utils/api-error.js";
@@ -64,4 +65,60 @@ export function getRazorpayPublicKey(): string {
     );
   }
   return key_id;
+}
+
+/**
+ * Cryptographically verifies Razorpay webhook signature using HMAC SHA-256.
+ *
+ * Security Requirements:
+ * - Computes HMAC SHA-256 digest using raw Buffer bytes.
+ * - Enforces timing-safe comparison (crypto.timingSafeEqual).
+ * - Validates signature format and length before comparison.
+ * - Rejects missing, invalid, or malformed signatures with false.
+ * - Never logs or exposes the webhook secret.
+ *
+ * @param rawBody Raw HTTP request buffer
+ * @param signature Value of X-Razorpay-Signature header
+ * @param secret Optional explicit webhook secret override (defaults to environment config)
+ * @returns true if cryptographically valid, false otherwise
+ */
+export function verifyRazorpayWebhookSignature(
+  rawBody: Buffer,
+  signature: string | undefined | null,
+  secret?: string
+): boolean {
+  if (!signature || typeof signature !== "string") {
+    return false;
+  }
+
+  const webhookSecret =
+    secret || process.env.RAZORPAY_WEBHOOK_SECRET || env.RAZORPAY_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    throw new AppError(
+      500,
+      "PAYMENT_GATEWAY_CONFIG_ERROR",
+      "RAZORPAY_WEBHOOK_SECRET is not configured"
+    );
+  }
+
+  const cleanSig = signature.trim();
+  // Valid Razorpay SHA-256 hex digest is exactly 64 hexadecimal characters
+  if (!/^[0-9a-fA-F]{64}$/.test(cleanSig)) {
+    return false;
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", webhookSecret)
+    .update(rawBody)
+    .digest("hex");
+
+  const sigBuffer = Buffer.from(cleanSig.toLowerCase(), "utf8");
+  const expectedBuffer = Buffer.from(expectedSignature.toLowerCase(), "utf8");
+
+  if (sigBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(sigBuffer, expectedBuffer);
 }

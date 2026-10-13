@@ -28,3 +28,37 @@ export async function createPaymentIntentHandler(
     next(error);
   }
 }
+
+/**
+ * Handler: POST /api/v1/payments/webhook
+ *
+ * Verifies Razorpay webhook HMAC signature on the raw body buffer and settles payment.
+ * Role: Provider-to-server callback (secured via cryptographic HMAC signature).
+ * Source: docs/api/API_CONTRACT.md Group 13.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 7.2.
+ */
+export async function handleRazorpayWebhookHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const rawBuffer: Buffer = Buffer.isBuffer(req.body)
+      ? req.body
+      : (req as any).rawBody;
+
+    if (!rawBuffer || !Buffer.isBuffer(rawBuffer) || rawBuffer.length === 0) {
+      throw AppError.unauthorized(
+        "Missing webhook request payload buffer",
+        "INVALID_WEBHOOK_SIGNATURE"
+      );
+    }
+
+    const signature = req.headers["x-razorpay-signature"] as string | undefined;
+
+    const result = await paymentService.handleRazorpayWebhook(rawBuffer, signature);
+
+    sendSuccess(res, result, "Webhook event processed successfully", 200);
+  } catch (error) {
+    next(error);
+  }
+}
