@@ -9,6 +9,7 @@ import { adminRouter } from "./admin.routes.js";
 import { appointmentRouter } from "./appointment.routes.js";
 import { paymentRouter } from "./payment.routes.js";
 import { consultationRouter } from "./consultation.routes.js";
+import { medicalRecordRouter } from "./medical-record.routes.js";
 
 export const apiV1Router = Router();
 
@@ -39,6 +40,9 @@ apiV1Router.use("/payments", paymentRouter);
 // Mount consultation router under /consultations -> /api/v1/consultations
 apiV1Router.use("/consultations", consultationRouter);
 
+// Mount medical-records router under /medical-records -> /api/v1/medical-records
+apiV1Router.use("/medical-records", medicalRecordRouter);
+
 export {
   authRouter,
   userRouter,
@@ -50,4 +54,5 @@ export {
   appointmentRouter,
   paymentRouter,
   consultationRouter,
+  medicalRecordRouter,
 };
