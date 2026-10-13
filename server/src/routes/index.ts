@@ -7,6 +7,7 @@ import { availabilityRouter } from "./availability.routes.js";
 import { pharmacyRouter } from "./pharmacy.routes.js";
 import { adminRouter } from "./admin.routes.js";
 import { appointmentRouter } from "./appointment.routes.js";
+import { paymentRouter } from "./payment.routes.js";
 
 export const apiV1Router = Router();
 
@@ -31,6 +32,9 @@ apiV1Router.use("/admin", adminRouter);
 // Mount appointment router under /appointments -> /api/v1/appointments
 apiV1Router.use("/appointments", appointmentRouter);
 
+// Mount payment router under /payments -> /api/v1/payments
+apiV1Router.use("/payments", paymentRouter);
+
 export {
   authRouter,
   userRouter,
@@ -40,4 +44,5 @@ export {
   pharmacyRouter,
   adminRouter,
   appointmentRouter,
+  paymentRouter,
 };
