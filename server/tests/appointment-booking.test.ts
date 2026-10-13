@@ -1814,5 +1814,288 @@ describe("Milestone 6 - Task 6.1: Two-Phase Slot Reservation & Concurrency Lock"
       const idemp = await IdempotencyRecord.findOne({ key: idempotencyKey });
       expect(idemp!.status).toBe(IdempotencyStatus.COMPLETED);
     });
+
+    it("6. deterministic recovery race: pauses recovery request A after finding appointment, request B takes over lease, and request A cannot overwrite or complete on behalf of request B", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const targetSlot = "2026-10-15T09:00:00.000Z";
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: targetSlot,
+        reason: "Deterministic recovery fencing race test",
+      };
+
+      // 1. Seed existing appointment associated with the idempotency key
+      const existingAppt = await Appointment.create({
+        patientId: patientUser._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date(targetSlot),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: payload.reason,
+        fee: 1200,
+        currency: "INR",
+        lockExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        idempotencyKey,
+      });
+
+      // Seed idempotency record in PROCESSING with expired lease
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            doctorId: payload.doctorId,
+            appointmentType: payload.appointmentType,
+            scheduledStart: new Date(payload.scheduledStart).toISOString(),
+            reason: payload.reason.trim(),
+          })
+        )
+        .digest("hex");
+
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 5000), // Expired lease
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const requestAReachedBarrier = createDeferred();
+      const requestAReleaseBarrier = createDeferred();
+      let interceptRequestA = true;
+
+      // 3. Pause request A deterministically after it finds the appointment but before its conditional idempotency update
+      const originalFindOne = Appointment.findOne.bind(Appointment);
+      const findOneSpy = vi
+        .spyOn(Appointment, "findOne")
+        .mockImplementation((...args: any[]) => {
+          const filter = args[0];
+          if (
+            interceptRequestA &&
+            filter &&
+            filter.idempotencyKey === idempotencyKey
+          ) {
+            interceptRequestA = false;
+            const query = (originalFindOne as any)(...args);
+            return query.then((foundDoc: any) => {
+              requestAReachedBarrier.resolve();
+              return requestAReleaseBarrier.promise.then(() => foundDoc);
+            });
+          }
+          return (originalFindOne as any)(...args);
+        });
+
+      try {
+        // 2. Let recovery request A acquire ownership and reach the existing-appointment recovery branch
+        const reqAPromise = request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payload)
+          .then((res) => res);
+
+        // Wait until Request A has acquired ownership and reached the barrier inside Appointment.findOne
+        await requestAReachedBarrier.promise;
+
+        // Verify request A acquired the lease with an ownerToken
+        const recordWhilePaused = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(recordWhilePaused).not.toBeNull();
+        expect(recordWhilePaused!.status).toBe(IdempotencyStatus.PROCESSING);
+        const ownerTokenA = recordWhilePaused!.ownerToken;
+        expect(ownerTokenA).toBeDefined();
+
+        // 4. Let request B take over the expired lease and establish a new owner token
+        // Force lease expiry in DB
+        await IdempotencyRecord.updateOne(
+          { key: idempotencyKey },
+          { $set: { lockedUntil: new Date(Date.now() - 5000) } }
+        );
+
+        const newOwnerTokenB = crypto.randomUUID();
+        const takeover = await IdempotencyRecord.findOneAndUpdate(
+          {
+            key: idempotencyKey,
+            status: IdempotencyStatus.PROCESSING,
+            lockedUntil: { $lte: new Date() },
+          },
+          {
+            $set: {
+              ownerToken: newOwnerTokenB,
+              lockedUntil: new Date(Date.now() + 60000), // Request B has active 60s lease
+            },
+          },
+          { new: true }
+        );
+        expect(takeover).not.toBeNull();
+        expect(takeover!.ownerToken).toBe(newOwnerTokenB);
+
+        // 5. Resume request A
+        requestAReleaseBarrier.resolve();
+        const resA = await reqAPromise;
+
+        // 6. Assert that request A cannot mark the record completed on behalf of the new owner,
+        // clear the new owner's lease/token, or overwrite the new owner's response state.
+        const recordAfterA = await IdempotencyRecord.findOne({
+          key: idempotencyKey,
+        });
+        expect(recordAfterA).not.toBeNull();
+        expect(recordAfterA!.status).toBe(IdempotencyStatus.PROCESSING);
+        expect(recordAfterA!.ownerToken).toBe(newOwnerTokenB);
+        expect(recordAfterA!.lockedUntil).toBeDefined();
+        expect(new Date(recordAfterA!.lockedUntil!).getTime()).toBeGreaterThan(
+          Date.now()
+        );
+        expect(recordAfterA!.responseData).toBeUndefined();
+        expect(recordAfterA!.responseMessage).toBeUndefined();
+
+        // 7. Verify the resulting response follows the established safe replay/conflict behavior
+        expect(resA.status).toBe(409);
+        expect(resA.body.success).toBe(false);
+        expect(resA.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+
+        // 8. Verify there is still at most one appointment for the patient/idempotency key
+        const appointments = await Appointment.find({ idempotencyKey });
+        expect(appointments).toHaveLength(1);
+        expect(appointments[0]._id.toString()).toBe(
+          existingAppt._id.toString()
+        );
+      } finally {
+        findOneSpy.mockRestore();
+        requestAReleaseBarrier.resolve();
+      }
+    });
+
+    it("7. deterministic recovery race replay: when request B completes while request A was paused, request A rereads and safely replays completed response", async () => {
+      const { profile, user: doctorUser } = await createDoctorFixture();
+      const { user: patientUser, token } = await createPatientFixture();
+
+      const idempotencyKey = crypto.randomUUID();
+      const targetSlot = "2026-10-15T09:00:00.000Z";
+      const payload = {
+        doctorId: profile._id.toString(),
+        appointmentType: "VIDEO",
+        scheduledStart: targetSlot,
+        reason: "Deterministic recovery replay race test",
+      };
+
+      const existingAppt = await Appointment.create({
+        patientId: patientUser._id,
+        doctorId: doctorUser._id,
+        appointmentType: ConsultationType.VIDEO,
+        scheduledStart: new Date(targetSlot),
+        scheduledEnd: new Date("2026-10-15T09:30:00.000Z"),
+        status: AppointmentStatus.PENDING_PAYMENT,
+        reason: payload.reason,
+        fee: 1500,
+        currency: "INR",
+        lockExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        idempotencyKey,
+      });
+
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            doctorId: payload.doctorId,
+            appointmentType: payload.appointmentType,
+            scheduledStart: new Date(payload.scheduledStart).toISOString(),
+            reason: payload.reason.trim(),
+          })
+        )
+        .digest("hex");
+
+      await IdempotencyRecord.create({
+        key: idempotencyKey,
+        userId: patientUser._id,
+        operation: "APPOINTMENT_RESERVATION",
+        requestHash,
+        status: IdempotencyStatus.PROCESSING,
+        lockedUntil: new Date(Date.now() - 5000),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+
+      const requestAReachedBarrier = createDeferred();
+      const requestAReleaseBarrier = createDeferred();
+      let interceptRequestA = true;
+
+      const originalFindOne = Appointment.findOne.bind(Appointment);
+      const findOneSpy = vi
+        .spyOn(Appointment, "findOne")
+        .mockImplementation((...args: any[]) => {
+          const filter = args[0];
+          if (
+            interceptRequestA &&
+            filter &&
+            filter.idempotencyKey === idempotencyKey
+          ) {
+            interceptRequestA = false;
+            const query = (originalFindOne as any)(...args);
+            return query.then((foundDoc: any) => {
+              requestAReachedBarrier.resolve();
+              return requestAReleaseBarrier.promise.then(() => foundDoc);
+            });
+          }
+          return (originalFindOne as any)(...args);
+        });
+
+      try {
+        const reqAPromise = request(app)
+          .post("/api/v1/appointments")
+          .set("Authorization", `Bearer ${token}`)
+          .set("Idempotency-Key", idempotencyKey)
+          .set("x-test-client-ip", getUniqueIp())
+          .send(payload)
+          .then((res) => res);
+
+        await requestAReachedBarrier.promise;
+
+        // While Request A is paused, Request B takes over and marks the record COMPLETED
+        await IdempotencyRecord.updateOne(
+          { key: idempotencyKey },
+          {
+            $set: {
+              status: IdempotencyStatus.COMPLETED,
+              responseStatus: 201,
+              responseData: {
+                appointmentId: existingAppt._id.toString(),
+                status: "PENDING_PAYMENT",
+                expiresAt: existingAppt.lockExpiresAt!.toISOString(),
+                fee: 1500,
+                currency: "INR",
+              },
+              responseMessage:
+                "Slot reserved for 15 minutes. Please complete payment.",
+              appointmentId: existingAppt._id,
+            },
+            $unset: { lockedUntil: 1, ownerToken: 1 },
+          }
+        );
+
+        // Resume request A
+        requestAReleaseBarrier.resolve();
+        const resA = await reqAPromise;
+
+        // Request A must fail conditional update, reread COMPLETED, and replay original response
+        expect(resA.status).toBe(201);
+        expect(resA.body.success).toBe(true);
+        expect(resA.body.data.appointmentId).toBe(existingAppt._id.toString());
+        expect(resA.body.data.isReplayed).toBe(true);
+
+        const appointments = await Appointment.find({ idempotencyKey });
+        expect(appointments).toHaveLength(1);
+      } finally {
+        findOneSpy.mockRestore();
+        requestAReleaseBarrier.resolve();
+      }
+    });
   });
 });

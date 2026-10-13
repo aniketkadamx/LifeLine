@@ -2,10 +2,13 @@ import type { Request, Response, NextFunction } from "express";
 import { appointmentService } from "../services/appointment.service.js";
 import { UserRole } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
-import { sendSuccess } from "../utils/api-response.js";
+import { sendPaginated, sendSuccess } from "../utils/api-response.js";
 import {
   idempotencyKeyHeaderSchema,
   type CreateAppointmentInput,
+  type ListAppointmentsQuery,
+  type CancelAppointmentInput,
+  type RescheduleAppointmentInput,
 } from "../validators/appointment.validator.js";
 
 /**
@@ -73,6 +76,114 @@ export async function createAppointmentHandler(
       "Slot reserved for 15 minutes. Please complete payment.",
       201
     );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Handler: GET /api/v1/appointments
+ *
+ * Lists appointments for the authenticated caller with role-based scoping and pagination.
+ * Roles: PATIENT (own), DOCTOR (assigned), ADMIN (all).
+ * Source: docs/api/API_CONTRACT.md Section 6.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
+ */
+export async function listAppointmentsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user || !req.user.id) {
+      throw AppError.unauthorized("Authentication required", "AUTH_TOKEN_MISSING");
+    }
+
+    const query = req.query as unknown as ListAppointmentsQuery;
+    const result = await appointmentService.listAppointments(
+      req.user,
+      query
+    );
+
+    sendPaginated(
+      res,
+      result.appointments,
+      {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        sort: query.sort,
+        order: query.order,
+      },
+      "Appointments retrieved successfully"
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Handler: PATCH /api/v1/appointments/:id/cancel
+ *
+ * Cancels a scheduled appointment under the 2-hour policy rule.
+ * Roles: PATIENT (owner), DOCTOR (assigned), ADMIN.
+ * Source: docs/api/API_CONTRACT.md Section 6.3 & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
+ */
+export async function cancelAppointmentHandler(
+  req: Request<{ id: string }, unknown, CancelAppointmentInput>,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user || !req.user.id) {
+      throw AppError.unauthorized("Authentication required", "AUTH_TOKEN_MISSING");
+    }
+
+    const ipAddress = (req.headers["x-test-client-ip"] as string) || req.ip;
+    const userAgent = req.headers["user-agent"];
+    const cancellationReason =
+      req.body.cancellationReason || req.body.reason || "Cancelled by user";
+
+    const updated = await appointmentService.cancelAppointment(
+      req.params.id,
+      req.user,
+      cancellationReason,
+      { ipAddress, userAgent }
+    );
+
+    sendSuccess(res, updated, "Appointment cancelled successfully", 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Handler: PATCH /api/v1/appointments/:id/reschedule
+ *
+ * Reschedules an appointment to a new slot with atomic slot shifting.
+ * Roles: PATIENT (owner), DOCTOR (assigned), ADMIN.
+ * Source: docs/api/API_CONTRACT.md & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
+ */
+export async function rescheduleAppointmentHandler(
+  req: Request<{ id: string }, unknown, RescheduleAppointmentInput>,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.user || !req.user.id) {
+      throw AppError.unauthorized("Authentication required", "AUTH_TOKEN_MISSING");
+    }
+
+    const ipAddress = (req.headers["x-test-client-ip"] as string) || req.ip;
+    const userAgent = req.headers["user-agent"];
+
+    const updated = await appointmentService.rescheduleAppointment(
+      req.params.id,
+      req.user,
+      req.body,
+      { ipAddress, userAgent }
+    );
+
+    sendSuccess(res, updated, "Appointment rescheduled successfully", 200);
   } catch (error) {
     next(error);
   }

@@ -12,11 +12,17 @@ import {
   UserStatus,
   UserRole,
   AuditAction,
+  type IAppointment,
 } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
 import { auditLogService } from "./audit-log.service.js";
 import { availabilityService } from "./availability.service.js";
-import type { CreateAppointmentInput } from "../validators/appointment.validator.js";
+import type {
+  CreateAppointmentInput,
+  ListAppointmentsQuery,
+  RescheduleAppointmentInput,
+} from "../validators/appointment.validator.js";
+import type { AuthenticatedUser } from "../types/express.js";
 
 export const IDEMPOTENCY_LEASE_MS = 60_000; // 60 seconds lease for active reservation processing
 
@@ -331,40 +337,7 @@ export class AppointmentService {
             );
           }
 
-          // Stale / abandoned claim: first check if an appointment was already created!
-          const existingAppointment = await Appointment.findOne({
-            patientId: userObjectId,
-            idempotencyKey,
-            status: {
-              $in: [
-                AppointmentStatus.PENDING_PAYMENT,
-                AppointmentStatus.CONFIRMED,
-                AppointmentStatus.IN_PROGRESS,
-              ],
-            },
-          });
-
-          if (existingAppointment) {
-            // Appointment was created previously! Reconstruct response and complete idempotency record
-            const result = this.buildReplayResponse(existingAppointment, true);
-            await IdempotencyRecord.updateOne(
-              { _id: existing._id },
-              {
-                $set: {
-                  status: IdempotencyStatus.COMPLETED,
-                  responseStatus: 201,
-                  responseData: result,
-                  responseMessage:
-                    "Slot reserved for 15 minutes. Please complete payment.",
-                  appointmentId: existingAppointment._id,
-                },
-                $unset: { lockedUntil: 1, ownerToken: 1 },
-              }
-            );
-            return result;
-          }
-
-          // No existing appointment: attempt to acquire the stale lease atomically with a NEW ownerToken
+          // Stale / abandoned claim: atomically acquire the stale lease with a NEW ownerToken FIRST
           const newOwnerToken = crypto.randomUUID();
           const acquired = await IdempotencyRecord.findOneAndUpdate(
             {
@@ -385,7 +358,19 @@ export class AppointmentService {
           );
 
           if (!acquired) {
-            // Another concurrent recovery request acquired the stale lease
+            // Another concurrent recovery request acquired the stale lease or completed it
+            const latest = await IdempotencyRecord.findById(existing._id);
+            if (latest && latest.status === IdempotencyStatus.COMPLETED) {
+              const cachedData = latest.responseData as any;
+              return {
+                appointmentId: cachedData.appointmentId,
+                status: cachedData.status,
+                expiresAt: cachedData.expiresAt,
+                fee: cachedData.fee,
+                currency: cachedData.currency,
+                isReplayed: true,
+              };
+            }
             throw new AppError(
               409,
               "IDEMPOTENCY_CONFLICT",
@@ -395,6 +380,72 @@ export class AppointmentService {
 
           currentOwnerToken = newOwnerToken;
           recordClaimed = true;
+
+          // With ownership established, check if an appointment was already created previously!
+          const existingAppointment = await Appointment.findOne({
+            patientId: userObjectId,
+            idempotencyKey,
+            status: {
+              $in: [
+                AppointmentStatus.PENDING_PAYMENT,
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.IN_PROGRESS,
+              ],
+            },
+          });
+
+          if (existingAppointment) {
+            // Reconstruct original response from persisted appointment
+            const result = this.buildReplayResponse(existingAppointment, true);
+
+            // Conditional update strictly fenced by our current ownerToken and PROCESSING status
+            const updateResult = await IdempotencyRecord.updateOne(
+              {
+                _id: existing._id,
+                status: IdempotencyStatus.PROCESSING,
+                ownerToken: currentOwnerToken,
+              },
+              {
+                $set: {
+                  status: IdempotencyStatus.COMPLETED,
+                  responseStatus: 201,
+                  responseData: result,
+                  responseMessage:
+                    "Slot reserved for 15 minutes. Please complete payment.",
+                  appointmentId: existingAppointment._id,
+                },
+                $unset: { lockedUntil: 1, ownerToken: 1 },
+              }
+            );
+
+            if (updateResult.matchedCount === 0) {
+              // Ownership was lost (lease expired and taken over by another request) before update executed!
+              recordClaimed = false; // Do not mutate or delete on failure
+              const latestRecord = await IdempotencyRecord.findById(existing._id);
+              if (
+                latestRecord &&
+                latestRecord.status === IdempotencyStatus.COMPLETED
+              ) {
+                const cachedData = latestRecord.responseData as any;
+                return {
+                  appointmentId: cachedData.appointmentId,
+                  status: cachedData.status,
+                  expiresAt: cachedData.expiresAt,
+                  fee: cachedData.fee,
+                  currency: cachedData.currency,
+                  isReplayed: true,
+                };
+              }
+              throw new AppError(
+                409,
+                "IDEMPOTENCY_CONFLICT",
+                "Request with identical idempotency key is currently being processed"
+              );
+            }
+
+            recordClaimed = false; // Successfully completed, no cleanup needed
+            return result;
+          }
         } else {
           throw idempError;
         }
@@ -645,6 +696,488 @@ export class AppointmentService {
         }
       }
       throw error;
+    }
+  }
+
+  /**
+   * List appointments with role-based scoping, date range filtering, and pagination.
+   * Endpoint: GET /api/v1/appointments
+   * Source: docs/api/API_CONTRACT.md Section 6.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
+   */
+  async listAppointments(
+    actor: AuthenticatedUser,
+    query: ListAppointmentsQuery
+  ): Promise<{
+    appointments: IAppointment[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const filter: Record<string, unknown> = {};
+
+    // 1. Role-based scoping (strictly server-side derived identity)
+    if (actor.role === UserRole.PATIENT) {
+      filter.patientId = new mongoose.Types.ObjectId(actor.id);
+    } else if (actor.role === UserRole.DOCTOR) {
+      const docProfile = await DoctorProfile.findOne({ userId: actor.id });
+      if (docProfile) {
+        filter.doctorId = {
+          $in: [
+            new mongoose.Types.ObjectId(actor.id),
+            docProfile._id,
+          ],
+        };
+      } else {
+        filter.doctorId = new mongoose.Types.ObjectId(actor.id);
+      }
+    } else if (actor.role === UserRole.ADMIN) {
+      if (query.patientId) {
+        filter.patientId = new mongoose.Types.ObjectId(query.patientId);
+      }
+      if (query.doctorId) {
+        filter.doctorId = new mongoose.Types.ObjectId(query.doctorId);
+      }
+    } else {
+      throw AppError.forbidden(
+        "Access denied: role not permitted to view appointments",
+        "AUTH_INSUFFICIENT_PERMISSIONS"
+      );
+    }
+
+    // 2. Status filtering
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    // 3. Date range filtering on scheduledStart
+    if (query.from || query.to) {
+      const dateFilter: Record<string, Date> = {};
+      if (query.from) {
+        dateFilter.$gte = new Date(query.from);
+      }
+      if (query.to) {
+        dateFilter.$lte = new Date(query.to);
+      }
+      filter.scheduledStart = dateFilter;
+    }
+
+    // 4. Pagination & sorting
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 20));
+    const skip = (page - 1) * limit;
+
+    const allowedSortFields = [
+      "scheduledStart",
+      "createdAt",
+      "updatedAt",
+      "fee",
+      "status",
+    ];
+    const sortField = allowedSortFields.includes(query.sort || "")
+      ? query.sort!
+      : "scheduledStart";
+    const sortOrder: 1 | -1 = query.order === "asc" ? 1 : -1;
+
+    const [total, appointments] = await Promise.all([
+      Appointment.countDocuments(filter),
+      Appointment.find(filter)
+        .sort({ [sortField]: sortOrder })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return {
+      appointments,
+      total,
+      page,
+      limit,
+    };
+  }
+
+  /**
+   * Cancel a scheduled appointment with 2-hour policy enforcement and atomic state transition.
+   * Endpoint: PATCH /api/v1/appointments/:id/cancel
+   * Source: docs/api/API_CONTRACT.md Section 6.3 & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
+   */
+  async cancelAppointment(
+    appointmentId: string,
+    actor: AuthenticatedUser,
+    cancellationReason: string,
+    clientContext?: { ipAddress?: string; userAgent?: string }
+  ): Promise<IAppointment> {
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      throw AppError.badRequest(
+        "Invalid appointment identifier format",
+        "BAD_REQUEST"
+      );
+    }
+
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) {
+      throw new AppError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
+    }
+
+    // 1. Ownership authorization verification
+    if (actor.role === UserRole.PATIENT) {
+      if (appointment.patientId.toString() !== actor.id) {
+        throw AppError.forbidden(
+          "Access denied: you do not have ownership of this appointment",
+          "AUTH_RESOURCE_ACCESS_DENIED"
+        );
+      }
+    } else if (actor.role === UserRole.DOCTOR) {
+      let isAssignedDoctor = appointment.doctorId.toString() === actor.id;
+      if (!isAssignedDoctor) {
+        const docProfile = await DoctorProfile.findOne({ userId: actor.id });
+        if (
+          docProfile &&
+          appointment.doctorId.toString() === docProfile._id.toString()
+        ) {
+          isAssignedDoctor = true;
+        }
+      }
+      if (!isAssignedDoctor) {
+        throw AppError.forbidden(
+          "Access denied: you are not the assigned doctor for this appointment",
+          "AUTH_RESOURCE_ACCESS_DENIED"
+        );
+      }
+    } else if (actor.role === UserRole.ADMIN) {
+      // Admin is explicitly permitted per authorization matrix
+    } else {
+      throw AppError.forbidden(
+        "Access denied: role not permitted to cancel appointments",
+        "AUTH_INSUFFICIENT_PERMISSIONS"
+      );
+    }
+
+    // 2. Two-Hour Cancellation Policy Rule (Patient only)
+    if (actor.role === UserRole.PATIENT) {
+      const nowMs = Date.now();
+      const scheduledStartMs = appointment.scheduledStart.getTime();
+      const timeRemainingMs = scheduledStartMs - nowMs;
+      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+      if (timeRemainingMs <= TWO_HOURS_MS) {
+        throw new AppError(
+          422,
+          "APPOINTMENT_CANCELLATION_WINDOW_EXPIRED",
+          "Cannot cancel appointment within 2 hours of scheduled start time"
+        );
+      }
+    }
+
+    // 3. State machine validation
+    if (appointment.status === AppointmentStatus.COMPLETED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_ALREADY_COMPLETED",
+        "Cannot cancel an appointment that has already been completed"
+      );
+    }
+
+    if (appointment.status === AppointmentStatus.CANCELLED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        "Appointment is already cancelled"
+      );
+    }
+
+    const cancellableStatuses = [
+      AppointmentStatus.PENDING_PAYMENT,
+      AppointmentStatus.CONFIRMED,
+    ];
+    if (!cancellableStatuses.includes(appointment.status)) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        `Cannot cancel appointment with current status '${appointment.status}'`
+      );
+    }
+
+    // 4. Conditional atomic state transition in MongoDB
+    // By transitioning status to CANCELLED, the appointment is automatically excluded
+    // from the partial unique active-slot index { doctorId: 1, scheduledStart: 1 },
+    // atomically freeing the slot for new bookings.
+    // Detects concurrent status changes or schedule shifts by matching current status & scheduledStart.
+    const updated = await Appointment.findOneAndUpdate(
+      {
+        _id: appointment._id,
+        status: { $in: cancellableStatuses },
+        scheduledStart: appointment.scheduledStart,
+      },
+      {
+        $set: {
+          status: AppointmentStatus.CANCELLED,
+          cancellation: {
+            reason: cancellationReason.trim(),
+            cancelledBy: new mongoose.Types.ObjectId(actor.id),
+            cancelledAt: new Date(),
+          },
+        },
+        $unset: { lockExpiresAt: 1 },
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        "Appointment status or schedule was modified concurrently"
+      );
+    }
+
+    // 5. Asynchronous audit logging
+    void auditLogService.log({
+      actorId: actor.id,
+      actorRole: actor.role as UserRole,
+      action: AuditAction.APPOINTMENT_CANCELLED,
+      resourceType: "Appointment",
+      resourceId: updated._id.toString(),
+      ipAddress: clientContext?.ipAddress,
+      userAgent: clientContext?.userAgent,
+      metadata: {
+        doctorId: updated.doctorId.toString(),
+        patientId: updated.patientId.toString(),
+        scheduledStart: updated.scheduledStart.toISOString(),
+        cancellationReason: cancellationReason.trim(),
+        previousStatus: appointment.status,
+      },
+      status: "SUCCESS",
+    });
+
+    return updated;
+  }
+
+  /**
+   * Reschedule an appointment to a new slot with atomic slot shifting.
+   * Endpoint: PATCH /api/v1/appointments/:id/reschedule
+   * Source: docs/api/API_CONTRACT.md & MASTER_IMPLEMENTATION_ROADMAP.md Task 6.2.
+   */
+  async rescheduleAppointment(
+    appointmentId: string,
+    actor: AuthenticatedUser,
+    input: RescheduleAppointmentInput,
+    clientContext?: { ipAddress?: string; userAgent?: string }
+  ): Promise<IAppointment> {
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      throw AppError.badRequest(
+        "Invalid appointment identifier format",
+        "BAD_REQUEST"
+      );
+    }
+
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) {
+      throw new AppError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
+    }
+
+    // 1. Ownership authorization verification
+    if (actor.role === UserRole.PATIENT) {
+      if (appointment.patientId.toString() !== actor.id) {
+        throw AppError.forbidden(
+          "Access denied: you do not have ownership of this appointment",
+          "AUTH_RESOURCE_ACCESS_DENIED"
+        );
+      }
+    } else if (actor.role === UserRole.DOCTOR) {
+      let isAssignedDoctor = appointment.doctorId.toString() === actor.id;
+      if (!isAssignedDoctor) {
+        const docProfile = await DoctorProfile.findOne({ userId: actor.id });
+        if (
+          docProfile &&
+          appointment.doctorId.toString() === docProfile._id.toString()
+        ) {
+          isAssignedDoctor = true;
+        }
+      }
+      if (!isAssignedDoctor) {
+        throw AppError.forbidden(
+          "Access denied: you are not the assigned doctor for this appointment",
+          "AUTH_RESOURCE_ACCESS_DENIED"
+        );
+      }
+    } else if (actor.role === UserRole.ADMIN) {
+      // Admin is explicitly permitted per authorization matrix
+    } else {
+      throw AppError.forbidden(
+        "Access denied: role not permitted to reschedule appointments",
+        "AUTH_INSUFFICIENT_PERMISSIONS"
+      );
+    }
+
+    // 2. State eligibility (strictly CONFIRMED per STATE_MACHINES.md)
+    if (appointment.status === AppointmentStatus.COMPLETED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_ALREADY_COMPLETED",
+        "Cannot modify a completed appointment"
+      );
+    }
+
+    if (appointment.status === AppointmentStatus.CANCELLED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        "Cannot reschedule a cancelled appointment"
+      );
+    }
+
+    if (appointment.status !== AppointmentStatus.CONFIRMED) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        `Cannot reschedule appointment with status '${appointment.status}'. Only confirmed appointments can be rescheduled.`
+      );
+    }
+
+    // 3. Four-Hour Rescheduling Policy Cutoff (STATE_MACHINES.md: current time < scheduledStart - 4h)
+    if (actor.role !== UserRole.ADMIN) {
+      const nowMs = Date.now();
+      const scheduledStartMs = appointment.scheduledStart.getTime();
+      const timeRemainingMs = scheduledStartMs - nowMs;
+      const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
+      if (timeRemainingMs <= FOUR_HOURS_MS) {
+        throw new AppError(
+          422,
+          "APPOINTMENT_RESCHEDULE_WINDOW_EXPIRED",
+          "Cannot reschedule appointment when 4 hours or less remain before scheduled start time"
+        );
+      }
+    }
+
+    // 3. Validate target schedule
+    const targetStartString = input.scheduledStart || input.newScheduledStart!;
+    const newScheduledStart = new Date(targetStartString);
+    if (isNaN(newScheduledStart.getTime())) {
+      throw AppError.unprocessable(
+        "Invalid scheduled start datetime",
+        "VALIDATION_ERROR",
+        [{ field: "scheduledStart", issue: "Invalid scheduled start datetime" }]
+      );
+    }
+
+    if (newScheduledStart.getTime() <= Date.now()) {
+      throw new AppError(
+        422,
+        "APPOINTMENT_PAST_DATE",
+        "Appointment cannot be scheduled in the past"
+      );
+    }
+
+    // If rescheduling to the exact same start time, nothing to shift
+    if (newScheduledStart.getTime() === appointment.scheduledStart.getTime()) {
+      return appointment;
+    }
+
+    // Calculate new end time preserving duration
+    const durationMs =
+      appointment.scheduledEnd.getTime() - appointment.scheduledStart.getTime();
+    const newScheduledEnd = new Date(newScheduledStart.getTime() + durationMs);
+
+    // 4. Verify Doctor Profile and eligibility
+    const doctorProfile = await DoctorProfile.findOne({
+      userId: appointment.doctorId,
+    });
+    if (!doctorProfile) {
+      throw new AppError(404, "DOCTOR_NOT_FOUND", "Doctor profile not found");
+    }
+    if (
+      doctorProfile.verificationStatus !==
+      DoctorVerificationStatus.APPROVED_VERIFIED
+    ) {
+      throw new AppError(
+        403,
+        "DOCTOR_NOT_VERIFIED",
+        "Doctor profile is not verified"
+      );
+    }
+
+    // 5. Target slot availability verification
+    // Use computeAvailableSlots to verify doctor working shifts, slot duration alignment, and exceptions
+    const targetDateStr = newScheduledStart.toISOString().split("T")[0];
+    const availability = await availabilityService.computeAvailableSlots(
+      doctorProfile._id.toString(),
+      targetDateStr
+    );
+
+    const targetTimeStr = newScheduledStart.toISOString().substring(11, 16);
+    const targetSlot = availability.slots.find(
+      (s) => s.startTime === targetTimeStr
+    );
+
+    if (!targetSlot || !targetSlot.available) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_SLOT_UNAVAILABLE",
+        "Requested appointment slot is not available"
+      );
+    }
+
+    // 6. Atomic Slot Shifting
+    // Conditional single-document update guarantees that:
+    // a) The appointment status and scheduledStart haven't changed concurrently (prevents stale-read lost updates).
+    // b) If the target slot conflicts, MongoDB's partial unique index
+    //    { doctorId: 1, scheduledStart: 1 } throws E11000 duplicate key error,
+    //    which leaves the original reservation completely intact.
+    try {
+      const updated = await Appointment.findOneAndUpdate(
+        {
+          _id: appointment._id,
+          status: appointment.status,
+          scheduledStart: appointment.scheduledStart,
+        },
+        {
+          $set: {
+            scheduledStart: newScheduledStart,
+            scheduledEnd: newScheduledEnd,
+            ...(input.reason ? { reason: input.reason.trim() } : {}),
+          },
+        },
+        { new: true }
+      );
+
+      if (!updated) {
+        throw new AppError(
+          409,
+          "APPOINTMENT_INVALID_TRANSITION",
+          "Appointment status or schedule changed concurrently"
+        );
+      }
+
+      // Asynchronous audit logging
+      void auditLogService.log({
+        actorId: actor.id,
+        actorRole: actor.role as UserRole,
+        action: AuditAction.APPOINTMENT_RESCHEDULED,
+        resourceType: "Appointment",
+        resourceId: updated._id.toString(),
+        ipAddress: clientContext?.ipAddress,
+        userAgent: clientContext?.userAgent,
+        metadata: {
+          doctorId: updated.doctorId.toString(),
+          patientId: updated.patientId.toString(),
+          previousStart: appointment.scheduledStart.toISOString(),
+          newStart: newScheduledStart.toISOString(),
+          reason: input.reason?.trim(),
+        },
+        status: "SUCCESS",
+      });
+
+      return updated;
+    } catch (err: unknown) {
+      if (this.isSlotDuplicateKeyError(err)) {
+        throw new AppError(
+          409,
+          "APPOINTMENT_SLOT_UNAVAILABLE",
+          "Requested appointment slot is already reserved or booked by another patient"
+        );
+      }
+      throw err;
     }
   }
 }
