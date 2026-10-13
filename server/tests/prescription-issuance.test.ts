@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import request from "supertest";
 import mongoose from "mongoose";
 import { app } from "../src/app.js";
@@ -11,11 +11,14 @@ import {
   Consultation,
   Prescription,
   AuditLog,
+  PharmacyProfile,
+  Order,
 } from "../src/models/index.js";
 import {
   UserRole,
   UserStatus,
   DoctorVerificationStatus,
+  PharmacyVerificationStatus,
   AppointmentStatus,
   ConsultationStatus,
   ConsultationType,
@@ -27,6 +30,7 @@ import { tokenService } from "../src/services/token.service.js";
 import {
   computePrescriptionDigest,
   calculatePrescriptionExpiry,
+  verifyPrescriptionDigest,
   prescriptionService,
 } from "../src/services/prescription.service.js";
 
@@ -52,6 +56,9 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
   let pharmacyUser: any;
   let pharmacyToken: string;
 
+  let unverifiedPharmacyUser: any;
+  let unverifiedPharmacyToken: string;
+
   let testAppointment: any;
   let testConsultation: any;
 
@@ -66,12 +73,16 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
     await Consultation.syncIndexes();
     await Prescription.syncIndexes();
     await AuditLog.syncIndexes();
+    await PharmacyProfile.syncIndexes();
+    await Order.syncIndexes();
   }, 30000);
 
   afterAll(async () => {
     await User.deleteMany({ email: { $regex: /@example\.com$/ } });
     await DoctorProfile.deleteMany({});
     await PatientProfile.deleteMany({});
+    await PharmacyProfile.deleteMany({});
+    await Order.deleteMany({});
     await Appointment.deleteMany({});
     await Consultation.deleteMany({});
     await Prescription.deleteMany({});
@@ -83,10 +94,12 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
     await Prescription.deleteMany({});
     await Consultation.deleteMany({});
     await Appointment.deleteMany({});
+    await Order.deleteMany({});
     await AuditLog.deleteMany({});
     await User.deleteMany({ email: { $regex: /@example\.com$/ } });
     await DoctorProfile.deleteMany({});
     await PatientProfile.deleteMany({});
+    await PharmacyProfile.deleteMany({});
 
     // 1. Verified Attending Doctor
     verifiedDoctorUser = await User.create({
@@ -237,6 +250,58 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
       pharmacyUser._id.toString(),
       UserRole.PHARMACY
     );
+    await PharmacyProfile.create({
+      userId: pharmacyUser._id,
+      pharmacyName: "Apollo Pharmacy",
+      ownerName: "Apollo Pharmacy",
+      licenseNumber: "LIC-PHARM-M93-001",
+      address: {
+        street: "123 Health Blvd",
+        city: "Mumbai",
+        state: "Maharashtra",
+        postalCode: "400001",
+        country: "India",
+      },
+      phone: "+919876540107",
+      email: "pharmacy.m93@example.com",
+      verificationStatus: PharmacyVerificationStatus.APPROVED_VERIFIED,
+      deliveryAvailable: true,
+      serviceArea: ["400001"],
+    });
+
+    // 8. Unverified Pharmacy User
+    unverifiedPharmacyUser = await User.create({
+      email: "pharmacy.unverified.m93@example.com",
+      phone: "+919876540108",
+      fullName: "Unverified Pharmacy",
+      passwordHash: "$2a$10$abcdefghijklmnopqrstuvwx",
+      role: UserRole.PHARMACY,
+      status: UserStatus.ACTIVE,
+      emailVerified: true,
+      phoneVerified: true,
+    });
+    unverifiedPharmacyToken = tokenService.generateAccessToken(
+      unverifiedPharmacyUser._id.toString(),
+      UserRole.PHARMACY
+    );
+    await PharmacyProfile.create({
+      userId: unverifiedPharmacyUser._id,
+      pharmacyName: "Unverified Pharmacy",
+      ownerName: "Unverified Pharmacy",
+      licenseNumber: "LIC-PHARM-M93-002",
+      address: {
+        street: "456 Health Ave",
+        city: "Mumbai",
+        state: "Maharashtra",
+        postalCode: "400002",
+        country: "India",
+      },
+      phone: "+919876540108",
+      email: "pharmacy.unverified.m93@example.com",
+      verificationStatus: PharmacyVerificationStatus.PENDING_REVIEW,
+      deliveryAvailable: false,
+      serviceArea: ["400002"],
+    });
 
     // Setup active Appointment & Consultation
     const now = Date.now();
@@ -531,6 +596,38 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
         })
         .expect(409);
       expect(resScheduled.body.error.code).toBe("CONSULTATION_NOT_STARTED");
+
+      // Reset consultation status for appointment checks
+      testConsultation.status = ConsultationStatus.IN_CONSULTATION;
+      await testConsultation.save();
+
+      // 8d: PENDING_PAYMENT appointment returns 409 APPOINTMENT_INELIGIBLE
+      testAppointment.status = AppointmentStatus.PENDING_PAYMENT;
+      await testAppointment.save();
+
+      const resPending = await request(app)
+        .post("/api/v1/prescriptions")
+        .set("Authorization", `Bearer ${verifiedDoctorToken}`)
+        .send({
+          appointmentId: testAppointment._id.toString(),
+          ...validMedicationPayload,
+        })
+        .expect(409);
+      expect(resPending.body.error.code).toBe("APPOINTMENT_INELIGIBLE");
+
+      // 8e: NO_SHOW appointment returns 409 APPOINTMENT_INELIGIBLE
+      testAppointment.status = AppointmentStatus.NO_SHOW;
+      await testAppointment.save();
+
+      const resNoShow = await request(app)
+        .post("/api/v1/prescriptions")
+        .set("Authorization", `Bearer ${verifiedDoctorToken}`)
+        .send({
+          appointmentId: testAppointment._id.toString(),
+          ...validMedicationPayload,
+        })
+        .expect(409);
+      expect(resNoShow.body.error.code).toBe("APPOINTMENT_INELIGIBLE");
     });
   });
 
@@ -664,6 +761,15 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
 
       expect(putRes.body.success).toBe(false);
       expect(putRes.body.error.code).toBe("PRESCRIPTION_IMMUTABLE");
+
+      // DELETE attempt returns 409
+      const deleteRes = await request(app)
+        .delete(`/api/v1/prescriptions/${prescriptionId}`)
+        .set("Authorization", `Bearer ${verifiedDoctorToken}`)
+        .expect(409);
+
+      expect(deleteRes.body.success).toBe(false);
+      expect(deleteRes.body.error.code).toBe("PRESCRIPTION_IMMUTABLE");
     });
 
     it("12. Concurrent or repeated issuance on the same consultation is rejected with HTTP 409", async () => {
@@ -689,6 +795,35 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
 
       expect(resDup.body.success).toBe(false);
       expect(resDup.body.error.code).toBe("RESOURCE_CONFLICT");
+    });
+
+    it("12b. Atomicity rollback prevents orphaned prescriptions if consultation linking fails", async () => {
+      const updateOneSpy = vi
+        .spyOn(Consultation, "updateOne")
+        .mockRejectedValueOnce(new Error("Simulated database write conflict during linking"));
+
+      const resFail = await request(app)
+        .post("/api/v1/prescriptions")
+        .set("Authorization", `Bearer ${verifiedDoctorToken}`)
+        .send({
+          appointmentId: testAppointment._id.toString(),
+          ...validMedicationPayload,
+        })
+        .expect(500);
+
+      expect(resFail.body.success).toBe(false);
+
+      // Verify no orphaned prescription was left behind in the database
+      const orphanPrescriptions = await Prescription.find({
+        consultationId: testConsultation._id,
+      });
+      expect(orphanPrescriptions.length).toBe(0);
+
+      // Verify consultation prescriptionId was not set
+      const freshConsultation = await Consultation.findById(testConsultation._id);
+      expect(freshConsultation?.prescriptionId).toBeFalsy();
+
+      updateOneSpy.mockRestore();
     });
   });
 
@@ -820,16 +955,106 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
         .expect(200);
       expect(adminRes.body.success).toBe(true);
 
-      // 5. Unrelated patient CANNOT retrieve (403)
+      // 5. Unverified pharmacy CANNOT retrieve (403)
+      await request(app)
+        .get(`/api/v1/prescriptions/${prescriptionId}`)
+        .set("Authorization", `Bearer ${unverifiedPharmacyToken}`)
+        .expect(403);
+
+      // 6. Unrelated patient CANNOT retrieve (403)
       await request(app)
         .get(`/api/v1/prescriptions/${prescriptionId}`)
         .set("Authorization", `Bearer ${otherPatientToken}`)
         .expect(403);
 
-      // 6. Unassigned doctor CANNOT retrieve (403)
+      // 7. Unassigned doctor CANNOT retrieve (403)
       await request(app)
         .get(`/api/v1/prescriptions/${prescriptionId}`)
         .set("Authorization", `Bearer ${otherDoctorToken}`)
+        .expect(403);
+
+      // 8. verifyPrescriptionDigest verifies the canonical integrity checksum
+      const rawPrescription = await Prescription.findById(prescriptionId);
+      expect(rawPrescription).toBeDefined();
+      expect(verifyPrescriptionDigest(rawPrescription!)).toBe(true);
+
+      // Tampered checksum fails verification
+      expect(verifyPrescriptionDigest(rawPrescription!, "0000000000000000000000000000000000000000000000000000000000000000")).toBe(false);
+      // Malformed checksum fails verification gracefully
+      expect(verifyPrescriptionDigest(rawPrescription!, "invalid-checksum")).toBe(false);
+
+      // 9. When an order is assigned to another pharmacy, only the assigned pharmacy has access
+      const assignedProfile = await PharmacyProfile.findOne({ userId: pharmacyUser._id });
+      const unassignedUser = await User.create({
+        email: "pharmacy.unassigned.m93@example.com",
+        phone: "+919876540109",
+        fullName: "MedPlus Pharmacy",
+        passwordHash: "$2a$10$abcdefghijklmnopqrstuvwx",
+        role: UserRole.PHARMACY,
+        status: UserStatus.ACTIVE,
+        emailVerified: true,
+        phoneVerified: true,
+      });
+      const unassignedToken = tokenService.generateAccessToken(
+        unassignedUser._id.toString(),
+        UserRole.PHARMACY
+      );
+      await PharmacyProfile.create({
+        userId: unassignedUser._id,
+        pharmacyName: "MedPlus Pharmacy",
+        ownerName: "MedPlus Pharmacy",
+        licenseNumber: "LIC-PHARM-M93-003",
+        address: {
+          street: "789 Health Rd",
+          city: "Mumbai",
+          state: "Maharashtra",
+          postalCode: "400003",
+          country: "India",
+        },
+        phone: "+919876540109",
+        email: "pharmacy.unassigned.m93@example.com",
+        verificationStatus: PharmacyVerificationStatus.APPROVED_VERIFIED,
+        deliveryAvailable: true,
+        serviceArea: ["400003"],
+      });
+
+      // Create order assigned specifically to Apollo Pharmacy (pharmacyUser)
+      await Order.create({
+        patientId: patientUser._id,
+        pharmacyId: assignedProfile!._id,
+        prescriptionId: rawPrescription!._id,
+        items: [
+          {
+            medicineId: new mongoose.Types.ObjectId(),
+            medicineName: "Amoxicillin 500mg",
+            quantity: 10,
+            unitPrice: 50,
+            totalPrice: 500,
+          },
+        ],
+        totals: {
+          subtotal: 500,
+          deliveryFee: 50,
+          totalAmount: 550,
+        },
+        deliveryAddress: {
+          city: "Mumbai",
+          state: "Maharashtra",
+          postalCode: "400001",
+          country: "India",
+        },
+      });
+
+      // Assigned pharmacy can view
+      await request(app)
+        .get(`/api/v1/prescriptions/${prescriptionId}`)
+        .set("Authorization", `Bearer ${pharmacyToken}`)
+        .expect(200);
+
+      // Unassigned verified pharmacy is denied access (403)
+      await request(app)
+        .get(`/api/v1/prescriptions/${prescriptionId}`)
+        .set("Authorization", `Bearer ${unassignedToken}`)
         .expect(403);
     });
   });

@@ -65,3 +65,15 @@ prescriptionRouter.put(
   validateParams(prescriptionIdParamSchema),
   modifyPrescriptionHandler
 );
+
+/**
+ * DELETE /api/v1/prescriptions/:id
+ * Rejects deletion attempts with HTTP 409 Conflict.
+ * Digital prescriptions are immutable legal records.
+ */
+prescriptionRouter.delete(
+  "/:id",
+  authenticate,
+  validateParams(prescriptionIdParamSchema),
+  modifyPrescriptionHandler
+);

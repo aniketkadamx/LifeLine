@@ -5,11 +5,14 @@ import {
   Consultation,
   Appointment,
   DoctorProfile,
+  PharmacyProfile,
+  Order,
 } from "../models/index.js";
 import {
   PrescriptionStatus,
   UserRole,
   DoctorVerificationStatus,
+  PharmacyVerificationStatus,
   AppointmentStatus,
   ConsultationStatus,
   AuditAction,
@@ -99,6 +102,53 @@ export function calculatePrescriptionExpiry(issuedAt: Date): Date {
   return expiresAt;
 }
 
+/**
+ * Cryptographically verifies that an issued prescription's payload has not been tampered with.
+ * Computes canonical payload digest and performs timing-safe comparison against expected checksum.
+ *
+ * @param prescription Prescription document to verify
+ * @param expectedChecksum Optional expected digest; defaults to prescription.integrityChecksum
+ * @returns true if verified and untampered, false otherwise
+ */
+export function verifyPrescriptionDigest(
+  prescription: IPrescription,
+  expectedChecksum?: string
+): boolean {
+  const checksum = expectedChecksum || prescription.integrityChecksum;
+  if (!checksum) {
+    return false;
+  }
+
+  const calculated = computePrescriptionDigest({
+    patientId: prescription.patientId.toString(),
+    doctorId: prescription.doctorId.toString(),
+    appointmentId: prescription.appointmentId?.toString(),
+    consultationId: prescription.consultationId?.toString(),
+    diagnosis: prescription.diagnosis,
+    medicines: prescription.medicines.map((m) => ({
+      medicineId: m.medicineId.toString(),
+      medicineName: m.medicineName,
+      dosage: m.dosage,
+      frequency: m.frequency,
+      durationDays: m.durationDays,
+      quantity: m.quantity,
+      route: m.route,
+      specialInstructions: m.specialInstructions,
+    })),
+    issuedAt: prescription.issuedAt || prescription.createdAt,
+    expiresAt: prescription.expiresAt,
+  });
+
+  const calculatedBuf = Buffer.from(calculated, "hex");
+  const checksumBuf = Buffer.from(checksum, "hex");
+
+  if (calculatedBuf.length !== checksumBuf.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(calculatedBuf, checksumBuf);
+}
+
 export class PrescriptionService {
   /**
    * Issues an immutable digital prescription for an active or completed clinical encounter.
@@ -108,11 +158,11 @@ export class PrescriptionService {
    * 2. Assignment Verification: Doctor must be the attending clinician assigned to the consultation & appointment.
    * 3. Encounter State Verification: Consultation must exist and be in an active/concluded state (ROOM_OPENED,
    *    IN_CONSULTATION, PAUSED, ENDED, or COMPLETED). Rejects SCHEDULED (call not started).
-   * 4. Cancellation Protection: Rejects cancelled or rejected parent appointments.
+   * 4. Cancellation Protection: Rejects cancelled, rejected, pending-payment, or no-show parent appointments.
    * 5. Immutable Medication Snapshot: Persists medication names, dosages, frequencies, and durations as fixed snapshots.
    * 6. Server-Controlled Timestamps: issuedAt is server-generated; expiresAt is exactly issuedAt + 90 calendar days.
    * 7. Immutability: Transitions status directly to FINALIZED_ISSUED; rejects future mutations.
-   * 8. Duplicate Prevention: Guards against duplicate issuance per consultation via atomic DB constraints.
+   * 8. Atomicity & Concurrency: Multi-document transaction on replica sets / atomic conditional update + rollback cleanup on standalone MongoDB.
    * 9. Cryptographic Integrity: Computes SHA-256 canonical digest on the issued payload.
    * 10. Fail-Safe Event & Audit: Emits PRESCRIPTION_ISSUED event and non-sensitive audit entry asynchronously.
    *
@@ -161,7 +211,9 @@ export class PrescriptionService {
 
     if (
       appointment.status === AppointmentStatus.CANCELLED ||
-      appointment.status === AppointmentStatus.REJECTED
+      appointment.status === AppointmentStatus.REJECTED ||
+      appointment.status === AppointmentStatus.PENDING_PAYMENT ||
+      appointment.status === AppointmentStatus.NO_SHOW
     ) {
       throw new AppError(
         409,
@@ -202,7 +254,7 @@ export class PrescriptionService {
       );
     }
 
-    // 5. Duplicate Issuance Prevention
+    // 5. Duplicate Issuance Pre-Check
     if (consultation.prescriptionId) {
       throw new AppError(
         409,
@@ -262,40 +314,123 @@ export class PrescriptionService {
       expiresAt,
     });
 
-    // 9. Persist Prescription Document Atomically
+    // 9. Multi-Document Atomicity / Transaction Handling
+    // Detect if connected MongoDB deployment supports multi-document transactions (replica set)
+    let isReplicaSet = false;
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const client = mongoose.connection.getClient();
+        const topology = (
+          client as unknown as {
+            topology?: { description?: { type?: string; setName?: string } };
+          }
+        )?.topology?.description;
+        isReplicaSet =
+          topology?.type === "ReplicaSetWithPrimary" ||
+          topology?.type === "Sharded" ||
+          Boolean(topology?.setName);
+      } catch {
+        isReplicaSet = false;
+      }
+    }
+
+    let session: mongoose.ClientSession | undefined = undefined;
+    if (isReplicaSet) {
+      try {
+        session = await mongoose.startSession();
+        session.startTransaction();
+      } catch {
+        session = undefined;
+      }
+    }
+
+    let createdPrescriptionId: mongoose.Types.ObjectId | undefined;
     let prescription: IPrescription;
+
     try {
-      prescription = await Prescription.create({
-        patientId: appointment.patientId, // Server-derived from appointment
-        doctorId: new mongoose.Types.ObjectId(user.id), // Authenticated identity
-        appointmentId: appointment._id,
-        consultationId: consultation._id,
-        status: PrescriptionStatus.FINALIZED_ISSUED,
-        diagnosis: input.diagnosis.trim(),
-        medicines: medicationSnapshots,
-        additionalNotes: input.additionalNotes?.trim() || undefined,
-        issuedAt,
-        expiresAt,
-        integrityChecksum,
-      });
-    } catch (dbError: any) {
-      if (dbError?.code === 11000) {
+      // Step A: Create Prescription with DB unique constraint
+      try {
+        const [createdDoc] = await Prescription.create(
+          [
+            {
+              patientId: appointment.patientId,
+              doctorId: new mongoose.Types.ObjectId(user.id),
+              appointmentId: appointment._id,
+              consultationId: consultation._id,
+              status: PrescriptionStatus.FINALIZED_ISSUED,
+              diagnosis: input.diagnosis.trim(),
+              medicines: medicationSnapshots,
+              additionalNotes: input.additionalNotes?.trim() || undefined,
+              issuedAt,
+              expiresAt,
+              integrityChecksum,
+            },
+          ],
+          session ? { session } : {}
+        );
+        prescription = createdDoc;
+        createdPrescriptionId = createdDoc._id;
+      } catch (dbError: any) {
+        if (dbError?.code === 11000) {
+          throw new AppError(
+            409,
+            "RESOURCE_CONFLICT",
+            "A digital prescription has already been issued for this consultation encounter"
+          );
+        }
+        throw dbError;
+      }
+
+      // Step B: Atomically link Prescription ID to Consultation
+      // Guard against race conditions using atomic conditional check
+      const consultationUpdate = await Consultation.updateOne(
+        {
+          _id: consultation._id,
+          $or: [
+            { prescriptionId: { $exists: false } },
+            { prescriptionId: null },
+          ],
+        },
+        { $set: { prescriptionId: createdPrescriptionId } },
+        session ? { session } : {}
+      );
+
+      if (consultationUpdate.matchedCount === 0) {
+        // Another concurrent request already linked a prescription to this consultation
+        if (session) {
+          await session.abortTransaction();
+        } else if (createdPrescriptionId) {
+          await Prescription.deleteOne({ _id: createdPrescriptionId });
+        }
         throw new AppError(
           409,
           "RESOURCE_CONFLICT",
           "A digital prescription has already been issued for this consultation encounter"
         );
       }
-      throw dbError;
+
+      // If in transaction, commit
+      if (session) {
+        await session.commitTransaction();
+      }
+    } catch (error) {
+      if (session) {
+        try {
+          await session.abortTransaction();
+        } catch {}
+      } else if (createdPrescriptionId) {
+        try {
+          await Prescription.deleteOne({ _id: createdPrescriptionId });
+        } catch {}
+      }
+      throw error;
+    } finally {
+      if (session) {
+        await session.endSession();
+      }
     }
 
-    // 10. Link Prescription ID back to Consultation document
-    await Consultation.updateOne(
-      { _id: consultation._id },
-      { $set: { prescriptionId: prescription._id } }
-    );
-
-    // 11. Side Effect: Asynchronous Fail-Safe Event Emission
+    // 10. Side Effect: Asynchronous Fail-Safe Event Emission
     try {
       const { io } = await import("../server.js");
       if (io) {
@@ -311,7 +446,7 @@ export class PrescriptionService {
       }
     } catch {}
 
-    // 12. Side Effect: Fail-Safe Audit Log
+    // 11. Side Effect: Fail-Safe Audit Log
     void auditLogService.log({
       actorId: user.id,
       actorRole: user.role,
@@ -360,13 +495,37 @@ export class PrescriptionService {
     const isPatientOwner =
       user.role === UserRole.PATIENT &&
       prescription.patientId.toString() === user.id;
+
     const isIssuingDoctor =
       user.role === UserRole.DOCTOR &&
       prescription.doctorId.toString() === user.id;
-    const isPharmacy = user.role === UserRole.PHARMACY;
+
+    let isAuthorizedPharmacy = false;
+    if (user.role === UserRole.PHARMACY) {
+      const pharmacyProfile = await PharmacyProfile.findOne({
+        userId: new mongoose.Types.ObjectId(user.id),
+      });
+
+      if (
+        pharmacyProfile &&
+        pharmacyProfile.verificationStatus === PharmacyVerificationStatus.APPROVED_VERIFIED
+      ) {
+        // If an order exists in M10, verify it is assigned to this pharmacy:
+        const order = await Order.findOne({ prescriptionId: prescription._id });
+        if (order) {
+          isAuthorizedPharmacy =
+            order.pharmacyId?.toString() === pharmacyProfile._id.toString() ||
+            order.pharmacyId?.toString() === user.id;
+        } else {
+          // In M9 before M10 order routing is implemented, verified pharmacies verifying prescriptions for orders
+          isAuthorizedPharmacy = true;
+        }
+      }
+    }
+
     const isAdmin = user.role === UserRole.ADMIN;
 
-    if (!isPatientOwner && !isIssuingDoctor && !isPharmacy && !isAdmin) {
+    if (!isPatientOwner && !isIssuingDoctor && !isAuthorizedPharmacy && !isAdmin) {
       throw AppError.forbidden(
         "Access denied: you do not have permission to view this digital prescription",
         "AUTH_RESOURCE_ACCESS_DENIED"
@@ -377,7 +536,7 @@ export class PrescriptionService {
   }
 
   /**
-   * Rejects any mutation attempt on a finalized prescription with HTTP 409 Conflict.
+   * Rejects any mutation or deletion attempt on a finalized prescription with HTTP 409 Conflict.
    * Issued prescriptions are immutable legal medical records.
    *
    * @throws AppError 409 Conflict
