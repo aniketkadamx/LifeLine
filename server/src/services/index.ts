@@ -29,3 +29,9 @@ export {
   type ParticipantTokenResult,
   type PrescriptionUnlockStatus,
 } from "./consultation.service.js";
+
+export {
+  medicineService,
+  MedicineService,
+  type MedicineSearchResult,
+} from "./medicine.service.js";
