@@ -21,3 +21,11 @@ export {
   type LoginResult,
   type RefreshResult,
 } from "./auth.service.js";
+
+export {
+  consultationService,
+  ConsultationService,
+  type InitiateSessionResult,
+  type ParticipantTokenResult,
+  type PrescriptionUnlockStatus,
+} from "./consultation.service.js";
