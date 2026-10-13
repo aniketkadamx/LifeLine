@@ -13,6 +13,7 @@ import { medicalRecordRouter } from "./medical-record.routes.js";
 import { prescriptionRouter } from "./prescription.routes.js";
 import { medicineRouter } from "./medicine.routes.js";
 import { inventoryRouter } from "./inventory.routes.js";
+import { orderRouter } from "./order.routes.js";
 
 export const apiV1Router = Router();
 
@@ -52,6 +53,9 @@ apiV1Router.use("/prescriptions", prescriptionRouter);
 // Mount medicine router under /medicines -> /api/v1/medicines
 apiV1Router.use("/medicines", medicineRouter);
 
+// Mount order router under /orders -> /api/v1/orders
+apiV1Router.use("/orders", orderRouter);
+
 export {
   authRouter,
   userRouter,
@@ -67,4 +71,5 @@ export {
   prescriptionRouter,
   medicineRouter,
   inventoryRouter,
+  orderRouter,
 };

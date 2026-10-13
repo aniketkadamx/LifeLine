@@ -843,10 +843,18 @@ describe("Milestone 9 - Task 9.3: Digital Prescription Builder & Cryptographic I
 
       const prescriptionId = res.body.data.id || res.body.data._id;
 
-      const auditRecord = await AuditLog.findOne({
+      let auditRecord = await AuditLog.findOne({
         action: AuditAction.PRESCRIPTION_ISSUED,
         resourceId: prescriptionId,
       });
+
+      if (!auditRecord) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        auditRecord = await AuditLog.findOne({
+          action: AuditAction.PRESCRIPTION_ISSUED,
+          resourceId: prescriptionId,
+        });
+      }
 
       expect(auditRecord).not.toBeNull();
       expect(auditRecord!.actorId.toString()).toBe(verifiedDoctorUser._id.toString());

@@ -42,3 +42,8 @@ export {
   type InventoryListResult,
   type PublicInventoryItem,
 } from "./inventory.service.js";
+
+export {
+  orderService,
+  OrderService,
+} from "./order.service.js";
