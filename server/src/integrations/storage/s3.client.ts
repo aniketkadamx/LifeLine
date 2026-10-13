@@ -1,4 +1,9 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../../config/env.js";
 import { AppError } from "../../utils/api-error.js";
@@ -37,9 +42,41 @@ export interface PresignedUploadUrlResult {
   };
 }
 
+/**
+ * Metadata retrieved from an object in cloud storage.
+ */
+export interface ObjectMetadataResult {
+  contentLength: number;
+  contentType: string;
+  eTag?: string;
+}
+
+/**
+ * Parameters for generating a secure pre-signed GET download URL.
+ */
+export interface GenerateDownloadUrlOptions {
+  objectKey: string;
+  expiresInSeconds?: number;
+}
+
+/**
+ * Result returned upon pre-signed download URL generation.
+ */
+export interface PresignedDownloadUrlResult {
+  downloadUrl: string;
+  expiresInSeconds: number;
+}
+
 let customCredentials: Partial<StorageCredentials> | null = null;
 let customS3Client: S3Client | null = null;
 let s3ClientInstance: S3Client | null = null;
+let mockObjectMetadataHandler:
+  | ((
+      key: string
+    ) =>
+      | Promise<ObjectMetadataResult>
+      | ObjectMetadataResult)
+  | null = null;
 
 /**
  * Sets or resets custom storage credentials (primarily used for automated testing).
@@ -59,6 +96,22 @@ export function setStorageCredentials(
 export function setS3Client(client: S3Client | null): void {
   customS3Client = client;
   s3ClientInstance = null;
+}
+
+/**
+ * Injects a mock metadata provider for HeadObject operations during automated testing.
+ * Pass null to restore real S3 client HeadObject execution.
+ */
+export function setMockObjectMetadata(
+  handler:
+    | ((
+        key: string
+      ) =>
+        | Promise<ObjectMetadataResult>
+        | ObjectMetadataResult)
+    | null
+): void {
+  mockObjectMetadataHandler = handler;
 }
 
 /**
@@ -199,6 +252,121 @@ export async function generatePresignedUploadUrl(
       503,
       "STORAGE_PROVIDER_ERROR",
       `Failed to generate object storage upload URL: ${message}`
+    );
+  }
+}
+
+/**
+ * Retrieves the object's actual metadata (ContentLength, ContentType) from cloud storage
+ * via a HeadObject operation, verifying that the file was uploaded and confirming its actual properties.
+ *
+ * Security Guarantees:
+ * - Confirms object actually exists in the private bucket before database persistence.
+ * - Inspects actual ContentLength and ContentType from S3 without downloading file bytes into memory.
+ * - Fails safely with 404 if object does not exist.
+ *
+ * @param objectKey Storage object key
+ * @returns ObjectMetadataResult containing verified contentLength and contentType
+ */
+export async function getObjectMetadata(
+  objectKey: string
+): Promise<ObjectMetadataResult> {
+  if (!objectKey || typeof objectKey !== "string" || !objectKey.trim()) {
+    throw AppError.badRequest("Storage object key is required", "BAD_REQUEST");
+  }
+
+  if (mockObjectMetadataHandler) {
+    return await mockObjectMetadataHandler(objectKey.trim());
+  }
+
+  const credentials = getStorageCredentials();
+  const client = getS3Client();
+
+  try {
+    const command = new HeadObjectCommand({
+      Bucket: credentials.bucket,
+      Key: objectKey.trim(),
+    });
+
+    const response = await client.send(command);
+
+    return {
+      contentLength: response.ContentLength ?? 0,
+      contentType: response.ContentType || "application/octet-stream",
+      eTag: response.ETag,
+    };
+  } catch (error: any) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    if (
+      error?.name === "NotFound" ||
+      error?.name === "NoSuchKey" ||
+      error?.$metadata?.httpStatusCode === 404
+    ) {
+      throw new AppError(
+        404,
+        "STORAGE_OBJECT_NOT_FOUND",
+        "Uploaded object not found in storage bucket"
+      );
+    }
+    const message = error instanceof Error ? error.message : "Provider failure";
+    throw new AppError(
+      503,
+      "STORAGE_PROVIDER_ERROR",
+      `Failed to retrieve object metadata: ${message}`
+    );
+  }
+}
+
+/**
+ * Generates a cryptographically signed S3 pre-signed GET URL with a 15-minute expiration (900 seconds).
+ *
+ * Security Guarantees:
+ * - Scoped strictly to the configured private bucket.
+ * - Expires in exactly 900 seconds (15 minutes) per AUTHORIZATION_MATRIX.md Section 4.
+ * - Never returns public read URLs or cloud credentials.
+ * - Never logs the signed URL.
+ *
+ * @param options - Download parameters (objectKey, expiresInSeconds)
+ * @returns PresignedDownloadUrlResult containing downloadUrl and expiresInSeconds
+ */
+export async function generatePresignedDownloadUrl(
+  options: GenerateDownloadUrlOptions
+): Promise<PresignedDownloadUrlResult> {
+  const { objectKey } = options;
+
+  if (!objectKey || typeof objectKey !== "string" || !objectKey.trim()) {
+    throw AppError.badRequest("Storage object key is required", "BAD_REQUEST");
+  }
+
+  const credentials = getStorageCredentials();
+  const client = getS3Client();
+  const expiresIn = options.expiresInSeconds ?? 900; // Exactly 15 minutes (900 seconds)
+
+  try {
+    const command = new GetObjectCommand({
+      Bucket: credentials.bucket,
+      Key: objectKey.trim(),
+    });
+
+    const downloadUrl = await getSignedUrl(client, command, {
+      expiresIn,
+    });
+
+    return {
+      downloadUrl,
+      expiresInSeconds: expiresIn,
+    };
+  } catch (error: unknown) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : "Provider failure";
+    throw new AppError(
+      503,
+      "STORAGE_PROVIDER_ERROR",
+      `Failed to generate object storage download URL: ${message}`
     );
   }
 }

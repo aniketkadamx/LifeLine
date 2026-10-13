@@ -1,4 +1,6 @@
 import { z } from "zod";
+import mongoose from "mongoose";
+import { MedicalRecordType } from "../types/models.js";
 
 /**
  * Maximum allowed medical file upload size: 15 MiB (15 * 1024 * 1024 bytes).
@@ -31,6 +33,13 @@ export const MIME_TO_EXTENSION_MAP: Record<AllowedMimeType, string> = {
 };
 
 /**
+ * Strict regex for server-generated random UUID storage keys.
+ * Format: records/<uuid>.<ext>
+ */
+export const STORAGE_KEY_REGEX =
+  /^records\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pdf|png|jpg|dcm)$/;
+
+/**
  * Request validation schema for generating a pre-signed object storage upload URL.
  * Endpoint: POST /api/v1/medical-records/upload-url
  * Role: PATIENT
@@ -59,3 +68,68 @@ export const uploadUrlSchema = z.object({
 });
 
 export type UploadUrlInput = z.infer<typeof uploadUrlSchema>;
+
+/**
+ * Request validation schema for registering medical record metadata after object upload.
+ * Endpoint: POST /api/v1/medical-records
+ * Role: PATIENT
+ * Source: docs/api/API_CONTRACT.md Group 8.2 & MASTER_IMPLEMENTATION_ROADMAP.md Task 9.2.
+ */
+export const createMedicalRecordSchema = z.object({
+  title: z
+    .string({ required_error: "Title is required" })
+    .trim()
+    .min(3, "Title must be at least 3 characters long")
+    .max(200, "Title cannot exceed 200 characters"),
+  description: z
+    .string()
+    .trim()
+    .max(2000, "Description cannot exceed 2000 characters")
+    .optional(),
+  recordType: z.nativeEnum(MedicalRecordType, {
+    errorMap: () => ({
+      message: `Invalid record type. Must be one of: ${Object.values(MedicalRecordType).join(", ")}`,
+    }),
+  }),
+  storageKey: z
+    .string({ required_error: "Storage key is required" })
+    .trim()
+    .regex(
+      STORAGE_KEY_REGEX,
+      "Storage key must match the server-generated format (records/<UUID>.<extension>)"
+    ),
+  fileName: z
+    .string()
+    .trim()
+    .min(1, "File name cannot be empty")
+    .max(255, "File name cannot exceed 255 characters")
+    .optional(),
+  recordDate: z
+    .string()
+    .datetime({ message: "recordDate must be a valid ISO 8601 UTC timestamp" })
+    .or(z.date())
+    .optional(),
+  relatedAppointmentId: z
+    .string()
+    .trim()
+    .refine((val) => mongoose.Types.ObjectId.isValid(val), {
+      message: "relatedAppointmentId must be a valid 24-character hex ObjectId",
+    })
+    .optional(),
+});
+
+export type CreateMedicalRecordInput = z.infer<typeof createMedicalRecordSchema>;
+
+/**
+ * Route parameter validation schema for medical record operations.
+ */
+export const medicalRecordIdParamSchema = z.object({
+  id: z
+    .string({ required_error: "Medical record ID is required" })
+    .trim()
+    .refine((val) => mongoose.Types.ObjectId.isValid(val), {
+      message: "Medical record ID must be a valid 24-character hex ObjectId",
+    }),
+});
+
+export type MedicalRecordIdParam = z.infer<typeof medicalRecordIdParamSchema>;
