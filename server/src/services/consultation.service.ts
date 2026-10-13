@@ -4,6 +4,7 @@ import {
   Consultation,
   DoctorProfile,
   Notification,
+  User,
 } from "../models/index.js";
 import {
   AppointmentStatus,
@@ -17,6 +18,10 @@ import {
 } from "../types/models.js";
 import { AppError } from "../utils/api-error.js";
 import { auditLogService } from "./audit-log.service.js";
+import {
+  generateLiveKitToken,
+  getLiveKitUrl,
+} from "../integrations/video/livekit.client.js";
 import type { AuthenticatedUser } from "../types/express.js";
 import type { SubmitClinicalNotesInput } from "../validators/consultation.validator.js";
 
@@ -31,6 +36,7 @@ export interface InitiateSessionResult {
   status: ConsultationStatus;
   token: string;
   expiresInSeconds: number;
+  livekitUrl?: string;
 }
 
 /**
@@ -42,6 +48,7 @@ export interface ParticipantTokenResult {
   token: string;
   expiresInSeconds: number;
   status: ConsultationStatus;
+  livekitUrl?: string;
 }
 
 /**
@@ -85,8 +92,8 @@ export class ConsultationService {
       throw new AppError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
     }
 
-    // 1. Authorization: Only assigned doctor or Admin
-    if (appointment.doctorId.toString() !== user.id && user.role !== UserRole.ADMIN) {
+    // 1. Authorization: Only assigned doctor
+    if (user.role !== UserRole.DOCTOR || appointment.doctorId.toString() !== user.id) {
       throw AppError.forbidden(
         "Access denied: you are not the assigned doctor for this appointment",
         "AUTH_RESOURCE_ACCESS_DENIED"
@@ -184,6 +191,9 @@ export class ConsultationService {
     }
 
     // 6. Concurrency & Idempotency: Retrieve existing or create new Consultation
+    const callerUser = await User.findById(user.id).select("fullName");
+    const participantName = callerUser?.fullName;
+
     let consultation = await Consultation.findOne({ appointmentId: appointment._id });
 
     if (consultation) {
@@ -204,23 +214,35 @@ export class ConsultationService {
         );
       }
 
-      // Re-entering active room: return existing room metadata
+      // Re-entering active room: return existing room metadata and mint a fresh signed LiveKit token
+      const token = await generateLiveKitToken({
+        roomName: consultation.roomId,
+        participantIdentity: user.id,
+        participantName,
+        canPublish: true,
+        canSubscribe: true,
+        ttlSeconds: 3600,
+      });
+
       return {
         consultationId: consultation._id.toString(),
         appointmentId: appointment._id.toString(),
         roomId: consultation.roomId,
         roomUrl: `/consultations/room/${consultation.roomId}`,
         status: consultation.status,
-        token: `mock_tok_doc_${consultation._id.toString()}_${user.id}`,
+        token,
         expiresInSeconds: 3600,
+        livekitUrl: getLiveKitUrl(),
       };
     }
 
-    // 7. Initialize new consultation entity
-    const roomId = `consultation-${appointment._id.toString()}`;
+    // 7. Initialize new consultation entity with canonical room name: consultation-<consultationId>
+    const consultationId = new mongoose.Types.ObjectId();
+    const roomId = `consultation-${consultationId.toString()}`;
 
     try {
       consultation = await Consultation.create({
+        _id: consultationId,
         appointmentId: appointment._id,
         patientId: appointment.patientId,
         doctorId: appointment.doctorId,
@@ -236,14 +258,23 @@ export class ConsultationService {
           appointmentId: appointment._id,
         });
         if (raceConsultation) {
+          const raceToken = await generateLiveKitToken({
+            roomName: raceConsultation.roomId,
+            participantIdentity: user.id,
+            participantName,
+            canPublish: true,
+            canSubscribe: true,
+            ttlSeconds: 3600,
+          });
           return {
             consultationId: raceConsultation._id.toString(),
             appointmentId: appointment._id.toString(),
             roomId: raceConsultation.roomId,
             roomUrl: `/consultations/room/${raceConsultation.roomId}`,
             status: raceConsultation.status,
-            token: `mock_tok_doc_${raceConsultation._id.toString()}_${user.id}`,
+            token: raceToken,
             expiresInSeconds: 3600,
+            livekitUrl: getLiveKitUrl(),
           };
         }
       }
@@ -310,14 +341,25 @@ export class ConsultationService {
       },
     });
 
+    // 12. Mint signed LiveKit token for the doctor
+    const token = await generateLiveKitToken({
+      roomName: consultation.roomId,
+      participantIdentity: user.id,
+      participantName,
+      canPublish: true,
+      canSubscribe: true,
+      ttlSeconds: 3600,
+    });
+
     return {
       consultationId: consultation._id.toString(),
       appointmentId: appointment._id.toString(),
       roomId: consultation.roomId,
       roomUrl: `/consultations/room/${consultation.roomId}`,
       status: consultation.status,
-      token: `mock_tok_doc_${consultation._id.toString()}_${user.id}`,
+      token,
       expiresInSeconds: 3600,
+      livekitUrl: getLiveKitUrl(),
     };
   }
 
@@ -384,19 +426,32 @@ export class ConsultationService {
       throw new AppError(404, "CONSULTATION_NOT_FOUND", "Consultation not found");
     }
 
-    // Participant verification
+    // Participant verification: Attending Doctor or Attending Patient
     const isDoctor =
       user.role === UserRole.DOCTOR &&
       consultation.doctorId.toString() === user.id;
     const isPatient =
       user.role === UserRole.PATIENT &&
       consultation.patientId.toString() === user.id;
-    const isAdmin = user.role === UserRole.ADMIN;
 
-    if (!isDoctor && !isPatient && !isAdmin) {
+    if (!isDoctor && !isPatient) {
       throw AppError.forbidden(
-        "Access denied: you are not a participant in this consultation",
+        "Access denied: only the attending doctor and patient may access consultation room tokens",
         "AUTH_RESOURCE_ACCESS_DENIED"
+      );
+    }
+
+    // Appointment verification: ensure appointment was not cancelled or rejected
+    const appointment = await Appointment.findById(consultation.appointmentId);
+    if (
+      appointment &&
+      (appointment.status === AppointmentStatus.CANCELLED ||
+        appointment.status === AppointmentStatus.REJECTED)
+    ) {
+      throw new AppError(
+        409,
+        "APPOINTMENT_INVALID_TRANSITION",
+        `Cannot join consultation for an appointment with status '${appointment.status}'`
       );
     }
 
@@ -439,12 +494,26 @@ export class ConsultationService {
       } catch {}
     }
 
+    // Generate signed LiveKit participant token
+    const callerUser = await User.findById(user.id).select("fullName");
+    const participantName = callerUser?.fullName;
+
+    const token = await generateLiveKitToken({
+      roomName: consultation.roomId,
+      participantIdentity: user.id,
+      participantName,
+      canPublish: true,
+      canSubscribe: true,
+      ttlSeconds: 3600,
+    });
+
     return {
       consultationId: consultation._id.toString(),
       roomId: consultation.roomId,
-      token: `mock_vid_token_${consultation._id.toString()}_${user.id}`,
+      token,
       expiresInSeconds: 3600,
       status: consultation.status,
+      livekitUrl: getLiveKitUrl(),
     };
   }
 

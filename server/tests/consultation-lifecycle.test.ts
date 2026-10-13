@@ -42,6 +42,10 @@ describe("Milestone 8 - Task 8.1: Consultation Lifecycle Management", () => {
   let adminToken: string;
 
   beforeAll(async () => {
+    process.env.LIVEKIT_API_KEY = "test_livekit_api_key_m8_82";
+    process.env.LIVEKIT_API_SECRET = "test_livekit_api_secret_key_at_least_32_chars_12345";
+    process.env.LIVEKIT_URL = "https://test.livekit.cloud";
+
     await connectDatabase(
       "mongodb://127.0.0.1:27017/lifeline_consultation_lifecycle_test"
     );
@@ -225,8 +229,8 @@ describe("Milestone 8 - Task 8.1: Consultation Lifecycle Management", () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.consultationId).toBeDefined();
-      expect(res.body.data.roomId).toBe(`consultation-${appt._id}`);
-      expect(res.body.data.roomUrl).toBe(`/consultations/room/consultation-${appt._id}`);
+      expect(res.body.data.roomId).toBe(`consultation-${res.body.data.consultationId}`);
+      expect(res.body.data.roomUrl).toBe(`/consultations/room/consultation-${res.body.data.consultationId}`);
       expect(res.body.data.status).toBe(ConsultationStatus.ROOM_OPENED);
       expect(res.body.data.token).toBeDefined();
 
@@ -378,14 +382,14 @@ describe("Milestone 8 - Task 8.1: Consultation Lifecycle Management", () => {
         .get(`/api/v1/consultations/${consultationId}`)
         .set("Authorization", `Bearer ${doctorToken}`);
       expect(docRes.status).toBe(200);
-      expect(docRes.body.data.roomId).toBe(`consultation-${appt._id}`);
+      expect(docRes.body.data.roomId).toBe(`consultation-${consultationId}`);
 
       // Patient view
       const patRes = await request(app)
         .get(`/api/v1/consultations/${consultationId}`)
         .set("Authorization", `Bearer ${patientToken}`);
       expect(patRes.status).toBe(200);
-      expect(patRes.body.data.roomId).toBe(`consultation-${appt._id}`);
+      expect(patRes.body.data.roomId).toBe(`consultation-${consultationId}`);
     });
 
     it("unassigned doctor cannot edit clinical notes or diagnosis", async () => {
@@ -782,7 +786,7 @@ describe("Milestone 8 - Task 8.1: Consultation Lifecycle Management", () => {
     it("creates patient in-app notification when room is initialized", async () => {
       const appt = await createEligibleAppointment();
 
-      await request(app)
+      const initRes = await request(app)
         .post(`/api/v1/consultations/${appt._id}/session`)
         .set("Authorization", `Bearer ${doctorToken}`);
 
@@ -793,7 +797,7 @@ describe("Milestone 8 - Task 8.1: Consultation Lifecycle Management", () => {
 
       expect(notif).toBeDefined();
       expect(notif?.title).toBe("Consultation Room Ready");
-      expect(notif?.metadata?.roomId).toBe(`consultation-${appt._id}`);
+      expect(notif?.metadata?.roomId).toBe(`consultation-${initRes.body.data.consultationId}`);
     });
 
     it("records audit log on completion without exposing sensitive clinical documentation text", async () => {
