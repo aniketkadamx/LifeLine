@@ -35,3 +35,10 @@ export {
   MedicineService,
   type MedicineSearchResult,
 } from "./medicine.service.js";
+
+export {
+  inventoryService,
+  InventoryService,
+  type InventoryListResult,
+  type PublicInventoryItem,
+} from "./inventory.service.js";

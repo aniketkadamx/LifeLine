@@ -12,6 +12,7 @@ import {
   updatePharmacyProfileSchema,
 } from "../validators/pharmacy.validator.js";
 import { UserRole } from "../types/models.js";
+import { inventoryRouter } from "./inventory.routes.js";
 
 export const pharmacyRouter = Router();
 
@@ -61,3 +62,10 @@ pharmacyRouter.post(
   validateBody(submitPharmacyLicenseSchema),
   submitPharmacyLicenseHandler
 );
+
+/**
+ * Sub-router: /api/v1/pharmacies/:id/inventory
+ * Handles inventory addition, stock updates, and public stock discovery.
+ * Source: docs/api/API_CONTRACT.md Group 11 & MASTER_IMPLEMENTATION_ROADMAP.md Task 10.2.
+ */
+pharmacyRouter.use("/:id/inventory", inventoryRouter);

@@ -45,3 +45,33 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
     next(error);
   }
 }
+
+/**
+ * Optional authentication middleware: parses Authorization Bearer token if present,
+ * populating req.user without rejecting unauthenticated requests.
+ */
+export function optionalAuthenticate(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return next();
+    }
+
+    const parts = authHeader.trim().split(/\s+/);
+    if (parts.length === 2 && parts[0] === "Bearer" && parts[1]) {
+      const payload = tokenService.verifyAccessToken(parts[1]);
+      req.user = {
+        id: payload.sub,
+        role: payload.role,
+        tokenId: payload.jti,
+      };
+    }
+  } catch {
+    // Gracefully ignore token errors for optional routes
+  }
+  next();
+}

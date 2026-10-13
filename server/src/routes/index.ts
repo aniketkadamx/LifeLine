@@ -12,6 +12,7 @@ import { consultationRouter } from "./consultation.routes.js";
 import { medicalRecordRouter } from "./medical-record.routes.js";
 import { prescriptionRouter } from "./prescription.routes.js";
 import { medicineRouter } from "./medicine.routes.js";
+import { inventoryRouter } from "./inventory.routes.js";
 
 export const apiV1Router = Router();
 
@@ -65,4 +66,5 @@ export {
   medicalRecordRouter,
   prescriptionRouter,
   medicineRouter,
+  inventoryRouter,
 };
