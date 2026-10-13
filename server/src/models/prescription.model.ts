@@ -119,12 +119,17 @@ const prescriptionSchema = new Schema<IPrescription>(
       type: String,
       trim: true,
     },
+    integrityChecksum: {
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,
   }
 );
 
+prescriptionSchema.index({ consultationId: 1 }, { unique: true, sparse: true });
 prescriptionSchema.index({ patientId: 1, issuedAt: -1 });
 prescriptionSchema.index({ doctorId: 1, issuedAt: -1 });
 prescriptionSchema.index({ status: 1, expiresAt: 1 });

@@ -465,6 +465,7 @@ export interface IPrescription {
   revokedAt?: Date;
   revokedBy?: Types.ObjectId;
   revocationReason?: string;
+  integrityChecksum?: string;
   createdAt: Date;
   updatedAt: Date;
 }
