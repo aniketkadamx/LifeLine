@@ -15,6 +15,7 @@ import { medicineRouter } from "./medicine.routes.js";
 import { inventoryRouter } from "./inventory.routes.js";
 import { orderRouter } from "./order.routes.js";
 import { chatRouter } from "./chat.routes.js";
+import { notificationRouter } from "./notification.routes.js";
 
 export const apiV1Router = Router();
 
@@ -60,6 +61,9 @@ apiV1Router.use("/orders", orderRouter);
 // Mount conversations router under /conversations -> /api/v1/conversations
 apiV1Router.use("/conversations", chatRouter);
 
+// Mount notifications router under /notifications -> /api/v1/notifications
+apiV1Router.use("/notifications", notificationRouter);
+
 export {
   authRouter,
   userRouter,
@@ -77,4 +81,5 @@ export {
   inventoryRouter,
   orderRouter,
   chatRouter,
+  notificationRouter,
 };

@@ -1,4 +1,4 @@
-import { Schema, model, type Model } from "mongoose";
+import mongoose, { Schema, model, type Model } from "mongoose";
 import { NotificationType, type INotification } from "../types/models.js";
 import { toJSONPlugin } from "./plugins/toJSON.plugin.js";
 
@@ -61,7 +61,6 @@ notificationSchema.index({ userId: 1, createdAt: -1 });
 
 notificationSchema.plugin(toJSONPlugin);
 
-export const Notification: Model<INotification> = model<INotification>(
-  "Notification",
-  notificationSchema
-);
+export const Notification: Model<INotification> =
+  (mongoose.models.Notification as Model<INotification>) ||
+  model<INotification>("Notification", notificationSchema);

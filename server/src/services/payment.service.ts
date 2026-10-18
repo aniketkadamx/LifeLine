@@ -20,6 +20,7 @@ import {
   verifyRazorpayWebhookSignature,
 } from "../integrations/payment/razorpay.client.js";
 import { auditLogService } from "./audit-log.service.js";
+import { notificationService } from "./notification.service.js";
 import type { CreatePaymentIntentInput } from "../validators/payment.validator.js";
 
 /**
@@ -663,6 +664,22 @@ export class PaymentService {
     } catch {
       // In decoupled test environments, ignore if io is not bound
     }
+
+    void notificationService
+      .dispatch({
+        userId: appointment.patientId,
+        type: NotificationType.APPOINTMENT_CONFIRMED,
+        title: "Appointment Confirmed",
+        message: "Your appointment has been successfully confirmed. A consultation room will open prior to scheduled start.",
+        relatedEntityType: "Appointment",
+        relatedEntityId: appointment._id,
+        metadata: {
+          appointmentId: appointment._id.toString(),
+          paymentId: payment._id.toString(),
+          scheduledStart: appointment.scheduledStart,
+        },
+      })
+      .catch(() => {});
 
     void auditLogService.log({
       actorRole: "SYSTEM",

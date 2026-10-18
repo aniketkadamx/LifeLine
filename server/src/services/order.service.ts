@@ -23,6 +23,7 @@ import {
 import { verifyPrescriptionDigest } from "./prescription.service.js";
 import { paymentService } from "./payment.service.js";
 import { auditLogService } from "./audit-log.service.js";
+import { notificationService } from "./notification.service.js";
 import { AppError } from "../utils/api-error.js";
 import type { AuthenticatedUser } from "../types/express.js";
 import type {
@@ -1301,8 +1302,8 @@ export class OrderService {
         })
         .catch(() => {});
 
-      try {
-        await Notification.create({
+      void notificationService
+        .dispatch({
           userId: updatedOrder.patientId,
           type: NotificationType.ORDER_DELIVERED,
           title: "Order Delivered",
@@ -1314,8 +1315,8 @@ export class OrderService {
             status: OrderStatus.DELIVERED,
             deliveredAt: updatedOrder.deliveredAt,
           },
-        });
-      } catch {}
+        })
+        .catch(() => {});
 
       try {
         const { io } = await import("../server.js");

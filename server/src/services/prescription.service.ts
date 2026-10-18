@@ -16,10 +16,12 @@ import {
   AppointmentStatus,
   ConsultationStatus,
   AuditAction,
+  NotificationType,
   type IPrescription,
   type IPrescriptionMedicineItem,
 } from "../types/models.js";
 import { auditLogService } from "./audit-log.service.js";
+import { notificationService } from "./notification.service.js";
 import { AppError } from "../utils/api-error.js";
 import type { AuthenticatedUser } from "../types/express.js";
 import type { IssuePrescriptionInput } from "../validators/prescription.validator.js";
@@ -430,7 +432,7 @@ export class PrescriptionService {
       }
     }
 
-    // 10. Side Effect: Asynchronous Fail-Safe Event Emission
+    // 10. Side Effect: Asynchronous Fail-Safe Event Emission & Multi-Channel Notification
     try {
       const { io } = await import("../server.js");
       if (io) {
@@ -445,6 +447,21 @@ export class PrescriptionService {
         });
       }
     } catch {}
+
+    void notificationService
+      .dispatch({
+        userId: appointment.patientId,
+        type: NotificationType.PRESCRIPTION_ISSUED,
+        title: "Digital Prescription Issued",
+        message: "Your doctor has issued a digital prescription for your consultation.",
+        relatedEntityType: "Prescription",
+        relatedEntityId: prescription._id,
+        metadata: {
+          appointmentId: appointment._id.toString(),
+          consultationId: consultation._id.toString(),
+        },
+      })
+      .catch(() => {});
 
     // 11. Side Effect: Fail-Safe Audit Log
     void auditLogService.log({
