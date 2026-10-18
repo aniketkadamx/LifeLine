@@ -848,7 +848,7 @@ export interface IReview {
   appointmentId?: Types.ObjectId;
   orderId?: Types.ObjectId;
   rating: number;
-  comment: string;
+  comment?: string;
   status: ReviewStatus;
   moderationReason?: string;
   createdAt: Date;

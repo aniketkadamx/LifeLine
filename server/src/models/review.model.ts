@@ -1,4 +1,4 @@
-import { Schema, model, type Model } from "mongoose";
+import mongoose, { Schema, model, type Model } from "mongoose";
 import { ReviewStatus, type IReview } from "../types/models.js";
 import { toJSONPlugin } from "./plugins/toJSON.plugin.js";
 
@@ -52,7 +52,6 @@ const reviewSchema = new Schema<IReview>(
     },
     comment: {
       type: String,
-      required: [true, "Review comment is required"],
       trim: true,
       minlength: [5, "Review comment must be at least 5 characters"],
       maxlength: [1000, "Review comment cannot exceed 1000 characters"],
@@ -86,4 +85,6 @@ reviewSchema.index({ patientId: 1, createdAt: -1 });
 
 reviewSchema.plugin(toJSONPlugin);
 
-export const Review: Model<IReview> = model<IReview>("Review", reviewSchema);
+export const Review: Model<IReview> =
+  (mongoose.models.Review as Model<IReview>) ||
+  model<IReview>("Review", reviewSchema);
