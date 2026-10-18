@@ -1,7 +1,9 @@
-import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Link } from "react-router-dom";
 import { AppLayout } from "../layouts/AppLayout";
 import { AuthLayout } from "../layouts/AuthLayout";
-import { ProtectedRoute, PublicRoute, isSafeRedirectPath } from "./ProtectedRoute";
+import { ProtectedRoute, PublicRoute } from "./ProtectedRoute";
+import { LoginPage } from "../features/auth/pages/LoginPage";
+import { RegisterPage } from "../features/auth/pages/RegisterPage";
 import { useAuthStore } from "../stores/auth.store";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -56,116 +58,6 @@ function LandingPage() {
   );
 }
 
-/**
- * Lightweight login screen placeholder for testing auth shell foundation.
- */
-function LoginPage() {
-  const { login } = useAuthStore();
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  const handleSimulateLogin = (role: UserRole) => {
-    login(
-      {
-        id: `usr_${role.toLowerCase()}_123`,
-        fullName: `Dr. / User (${role})`,
-        email: `${role.toLowerCase()}@lifeline.org`,
-        role,
-        status: "ACTIVE",
-      },
-      `mock_access_token_${role.toLowerCase()}`
-    );
-
-    const rawFrom = (location.state as { from?: { pathname?: string } })?.from?.pathname;
-    const destination = isSafeRedirectPath(rawFrom) ? rawFrom : `/${role.toLowerCase()}/dashboard`;
-    navigate(destination, { replace: true });
-  };
-
-  return (
-    <Card className="shadow-md border-border">
-      <CardHeader className="text-center pb-4">
-        <CardTitle className="text-xl">Sign in to LifeLine</CardTitle>
-        <CardDescription>
-          Access your clinical records, consultations, or healthcare portal
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="rounded-lg border border-border/80 bg-muted/40 p-3 text-xs text-muted-foreground">
-          <p className="font-medium text-foreground mb-1">Task 13.1 Shell Foundation Verification</p>
-          <p>Select any role below to simulate instant authenticated session dispatch:</p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2.5">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleSimulateLogin("PATIENT")}
-            className="border-emerald-200 text-emerald-800 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300"
-          >
-            Patient Session
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleSimulateLogin("DOCTOR")}
-            className="border-blue-200 text-blue-800 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
-          >
-            Doctor Session
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleSimulateLogin("PHARMACY")}
-            className="border-amber-200 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300"
-          >
-            Pharmacy Session
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleSimulateLogin("ADMIN")}
-            className="border-purple-200 text-purple-800 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300"
-          >
-            Admin Session
-          </Button>
-        </div>
-
-        <div className="pt-2 text-center text-xs text-muted-foreground">
-          Don't have an account?{" "}
-          <Link to="/register" className="font-semibold text-primary underline underline-offset-4">
-            Register here
-          </Link>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * Lightweight registration view placeholder.
- */
-function RegisterPage() {
-  return (
-    <Card className="shadow-md border-border">
-      <CardHeader className="text-center pb-4">
-        <CardTitle className="text-xl">Create your LifeLine Account</CardTitle>
-        <CardDescription>Join our unified digital healthcare platform</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground text-center">
-          Onboarding workflows will be implemented in Task 13.2.
-        </p>
-        <div className="text-center pt-2">
-          <Link to="/login">
-            <Button variant="outline" className="w-full">
-              Back to Sign In
-            </Button>
-          </Link>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
 
 /**
  * Generic placeholder component for role dashboards.
