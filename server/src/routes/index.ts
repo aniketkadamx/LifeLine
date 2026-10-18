@@ -14,6 +14,7 @@ import { prescriptionRouter } from "./prescription.routes.js";
 import { medicineRouter } from "./medicine.routes.js";
 import { inventoryRouter } from "./inventory.routes.js";
 import { orderRouter } from "./order.routes.js";
+import { chatRouter } from "./chat.routes.js";
 
 export const apiV1Router = Router();
 
@@ -56,6 +57,9 @@ apiV1Router.use("/medicines", medicineRouter);
 // Mount order router under /orders -> /api/v1/orders
 apiV1Router.use("/orders", orderRouter);
 
+// Mount conversations router under /conversations -> /api/v1/conversations
+apiV1Router.use("/conversations", chatRouter);
+
 export {
   authRouter,
   userRouter,
@@ -72,4 +76,5 @@ export {
   medicineRouter,
   inventoryRouter,
   orderRouter,
+  chatRouter,
 };

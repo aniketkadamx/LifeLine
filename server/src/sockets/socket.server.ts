@@ -3,6 +3,7 @@ import { Server as SocketIOServer, type Socket } from "socket.io";
 import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import { socketAuthMiddleware, type SocketUser } from "./middlewares/auth.socket.js";
+import { registerChatHandlers } from "./handlers/chat.handler.js";
 import { Appointment } from "../models/appointment.model.js";
 import { Consultation } from "../models/consultation.model.js";
 import { AppointmentStatus, UserRole } from "../types/models.js";
@@ -272,6 +273,9 @@ export function initSocketServer(httpServer: http.Server): SocketIOServer {
         handleLeaveRoom(socket, data, callback);
       }
     );
+
+    // Chat messaging events
+    registerChatHandlers(ioInstance!, socket);
 
     socket.on("disconnect", () => {
       // Disconnect cleanup: socket is automatically removed from all rooms by Socket.IO

@@ -901,3 +901,19 @@ export interface IRefreshToken {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * Consultation chat message document interface.
+ * Source: docs/api/API_CONTRACT.md Group 15, MASTER_IMPLEMENTATION_ROADMAP.md Task 11.2.
+ */
+export interface IMessage {
+  _id: Types.ObjectId;
+  id?: string;
+  consultationId: Types.ObjectId;
+  senderId: Types.ObjectId;
+  senderRole: UserRole;
+  text: string;
+  clientMessageId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}

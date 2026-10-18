@@ -10,6 +10,8 @@ export { Appointment } from "./appointment.model.js";
 export { Consultation } from "./consultation.model.js";
 export { MedicalRecord } from "./medical-record.model.js";
 export { Prescription } from "./prescription.model.js";
+export { Message } from "./message.model.js";
+
 
 // Commerce & Operational Models
 export { Medicine } from "./medicine.model.js";
@@ -86,5 +88,6 @@ export {
   type IComplaintResolution,
   type IComplaint,
   type IRefreshToken,
+  type IMessage,
 } from "../types/models.js";
 
