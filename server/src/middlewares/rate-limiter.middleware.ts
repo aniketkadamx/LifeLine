@@ -11,6 +11,7 @@ export interface RateLimiterOptions {
   limit: number;
   code?: string;
   message?: string;
+  keyGenerator?: (req: Request) => string;
 }
 
 /**
@@ -36,7 +37,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimitRequest
     limit: options.limit,
     standardHeaders: "draft-6",
     legacyHeaders: false,
-    keyGenerator: resolveClientIp,
+    keyGenerator: options.keyGenerator || resolveClientIp,
     handler: (_req: Request, _res: Response, next: NextFunction) => {
       next(
         new AppError(
@@ -72,12 +73,19 @@ export const authLimiter = createRateLimiter({
 });
 
 /**
- * AI service rate limiter: 10 requests per minute.
- * Exported for future AI query endpoints.
+ * AI service rate limiter: 10 requests per minute per authenticated user.
+ * Keys by authenticated user ID (req.user.id) to protect expensive LLM providers.
+ * Falls back to client IP for unauthenticated requests.
  */
 export const aiLimiter = createRateLimiter({
   windowMs: 1 * 60 * 1000, // 1 minute
   limit: 10, // 10 requests per minute
   code: "AI_RATE_LIMIT_EXCEEDED",
   message: "AI assistant rate limit exceeded, please try again later",
+  keyGenerator: (req: Request) => {
+    if (req.user?.id) {
+      return `user:${req.user.id}`;
+    }
+    return resolveClientIp(req);
+  },
 });

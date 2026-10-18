@@ -51,6 +51,9 @@ export const envSchema = z.object({
   // AI Service Provider - Gemini / LLM (Optional until Milestone 12)
   AI_API_KEY: z.string().optional(),
   AI_MODEL: z.string().default("gemini-1.5-pro").optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default("gemini-1.5-flash").optional(),
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

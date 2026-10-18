@@ -19,6 +19,7 @@ import { notificationRouter } from "./notification.routes.js";
 import { reviewRouter } from "./review.routes.js";
 import { complaintRouter } from "./complaint.routes.js";
 import { analyticsRouter } from "./analytics.routes.js";
+import { aiRouter } from "./ai.routes.js";
 
 export const apiV1Router = Router();
 
@@ -76,6 +77,9 @@ apiV1Router.use("/complaints", complaintRouter);
 // Mount analytics router under /analytics -> /api/v1/analytics
 apiV1Router.use("/analytics", analyticsRouter);
 
+// Mount AI healthcare assistant router under /ai -> /api/v1/ai
+apiV1Router.use("/ai", aiRouter);
+
 export {
   authRouter,
   userRouter,
@@ -97,4 +101,5 @@ export {
   reviewRouter,
   complaintRouter,
   analyticsRouter,
+  aiRouter,
 };
