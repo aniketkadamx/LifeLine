@@ -29,6 +29,7 @@ describe("Milestone 6 - Task 6.2: Appointment Management (List, Reschedule, Canc
   }
 
   beforeAll(async () => {
+    vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
     await connectDatabase(
       "mongodb://127.0.0.1:27017/lifeline_appointment_management_test"
     );
@@ -39,6 +40,7 @@ describe("Milestone 6 - Task 6.2: Appointment Management (List, Reschedule, Canc
   }, 30000);
 
   afterAll(async () => {
+    vi.useRealTimers();
     if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
       await mongoose.connection.db.dropDatabase();
     }

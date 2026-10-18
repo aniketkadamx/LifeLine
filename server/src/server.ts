@@ -1,25 +1,16 @@
 import http from "node:http";
-import { Server as SocketIOServer } from "socket.io";
 import { app } from "./app.js";
 import { env, connectDatabase, disconnectDatabase } from "./config/index.js";
 import { startAllJobs, stopAllJobs } from "./jobs/index.js";
+import {
+  initSocketServer,
+  closeSocketServer,
+} from "./sockets/socket.server.js";
 
 const server = http.createServer(app);
 
-// Attach Socket.IO for real-time architecture baseline
-export const io = new SocketIOServer(server, {
-  cors: {
-    origin: env.CLIENT_URL,
-    credentials: true,
-  },
-});
-
-io.on("connection", (socket) => {
-  // Real-time connection handler ready for domain events
-  socket.on("disconnect", () => {
-    // Socket cleanup
-  });
-});
+// Attach authenticated Socket.IO server for real-time architecture baseline
+export const io = initSocketServer(server);
 
 /**
  * Graceful application termination.
@@ -32,9 +23,8 @@ export async function shutdown(signal: string): Promise<void> {
   stopAllJobs();
 
   // Close Socket.IO
-  io.close(() => {
-    console.log("[Socket.IO] Closed all active socket connections");
-  });
+  await closeSocketServer();
+  console.log("[Socket.IO] Closed all active socket connections");
 
   // Close HTTP Server
   server.close(async () => {
