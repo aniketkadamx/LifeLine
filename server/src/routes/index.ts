@@ -18,6 +18,7 @@ import { chatRouter } from "./chat.routes.js";
 import { notificationRouter } from "./notification.routes.js";
 import { reviewRouter } from "./review.routes.js";
 import { complaintRouter } from "./complaint.routes.js";
+import { analyticsRouter } from "./analytics.routes.js";
 
 export const apiV1Router = Router();
 
@@ -72,6 +73,9 @@ apiV1Router.use("/reviews", reviewRouter);
 // Mount complaints router under /complaints -> /api/v1/complaints
 apiV1Router.use("/complaints", complaintRouter);
 
+// Mount analytics router under /analytics -> /api/v1/analytics
+apiV1Router.use("/analytics", analyticsRouter);
+
 export {
   authRouter,
   userRouter,
@@ -92,4 +96,5 @@ export {
   notificationRouter,
   reviewRouter,
   complaintRouter,
+  analyticsRouter,
 };
