@@ -18,6 +18,7 @@ import { AdminDashboard } from "../features/admin/pages/AdminDashboard";
 import { VerificationQueuePage } from "../features/admin/pages/VerificationQueuePage";
 import { ComplaintsPage } from "../features/admin/pages/ComplaintsPage";
 import { AuditLogsPage } from "../features/admin/pages/AuditLogsPage";
+import { ConsultationRoomPage } from "../features/consultations/pages/ConsultationRoomPage";
 import { useAuthStore } from "../stores/auth.store";
 import { Button } from "../components/ui/button";
 import { Activity, ArrowRight } from "lucide-react";
@@ -284,6 +285,24 @@ export function AppRoutes() {
           element={
             <ProtectedRoute allowedRoles={["ADMIN"]}>
               <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Telemedicine Video Consultation Rooms (Shared across authorized clinical roles) */}
+        <Route
+          path="/consultations/room/:roomId"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT", "DOCTOR", "ADMIN"]}>
+              <ConsultationRoomPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/consultations/:id"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT", "DOCTOR", "ADMIN"]}>
+              <ConsultationRoomPage />
             </ProtectedRoute>
           }
         />
