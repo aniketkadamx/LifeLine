@@ -4,6 +4,10 @@ import { AuthLayout } from "../layouts/AuthLayout";
 import { ProtectedRoute, PublicRoute } from "./ProtectedRoute";
 import { LoginPage } from "../features/auth/pages/LoginPage";
 import { RegisterPage } from "../features/auth/pages/RegisterPage";
+import { PatientDashboard } from "../features/patients/pages/PatientDashboard";
+import { DoctorSearchPage } from "../features/doctors/pages/DoctorSearchPage";
+import { RecordsPage } from "../features/medical-records/pages/RecordsPage";
+import { PatientOrdersPage } from "../features/orders/pages/PatientOrdersPage";
 import { useAuthStore } from "../stores/auth.store";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -171,7 +175,31 @@ export function AppRoutes() {
           path="/patient/dashboard"
           element={
             <ProtectedRoute allowedRoles={["PATIENT"]}>
-              <RoleDashboardPlaceholder role="PATIENT" />
+              <PatientDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/doctors"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <DoctorSearchPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/medical-records"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <RecordsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/orders"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <PatientOrdersPage />
             </ProtectedRoute>
           }
         />
@@ -179,7 +207,7 @@ export function AppRoutes() {
           path="/patient/*"
           element={
             <ProtectedRoute allowedRoles={["PATIENT"]}>
-              <RoleDashboardPlaceholder role="PATIENT" />
+              <PatientDashboard />
             </ProtectedRoute>
           }
         />
