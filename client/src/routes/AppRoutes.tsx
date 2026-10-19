@@ -8,6 +8,9 @@ import { PatientDashboard } from "../features/patients/pages/PatientDashboard";
 import { DoctorSearchPage } from "../features/doctors/pages/DoctorSearchPage";
 import { RecordsPage } from "../features/medical-records/pages/RecordsPage";
 import { PatientOrdersPage } from "../features/orders/pages/PatientOrdersPage";
+import { DoctorDashboard } from "../features/doctors/pages/DoctorDashboard";
+import { AvailabilitySettingsPage } from "../features/doctors/pages/AvailabilitySettingsPage";
+import { DoctorAppointmentsPage } from "../features/doctors/pages/DoctorAppointmentsPage";
 import { useAuthStore } from "../stores/auth.store";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -217,7 +220,31 @@ export function AppRoutes() {
           path="/doctor/dashboard"
           element={
             <ProtectedRoute allowedRoles={["DOCTOR"]}>
-              <RoleDashboardPlaceholder role="DOCTOR" />
+              <DoctorDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/doctor/schedule"
+          element={
+            <ProtectedRoute allowedRoles={["DOCTOR"]}>
+              <AvailabilitySettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/doctor/availability"
+          element={
+            <ProtectedRoute allowedRoles={["DOCTOR"]}>
+              <AvailabilitySettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/doctor/appointments"
+          element={
+            <ProtectedRoute allowedRoles={["DOCTOR"]}>
+              <DoctorAppointmentsPage />
             </ProtectedRoute>
           }
         />
@@ -225,7 +252,7 @@ export function AppRoutes() {
           path="/doctor/*"
           element={
             <ProtectedRoute allowedRoles={["DOCTOR"]}>
-              <RoleDashboardPlaceholder role="DOCTOR" />
+              <DoctorDashboard />
             </ProtectedRoute>
           }
         />
