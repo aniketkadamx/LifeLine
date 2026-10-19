@@ -11,6 +11,9 @@ import { PatientOrdersPage } from "../features/orders/pages/PatientOrdersPage";
 import { DoctorDashboard } from "../features/doctors/pages/DoctorDashboard";
 import { AvailabilitySettingsPage } from "../features/doctors/pages/AvailabilitySettingsPage";
 import { DoctorAppointmentsPage } from "../features/doctors/pages/DoctorAppointmentsPage";
+import { PharmacyDashboard } from "../features/pharmacies/pages/PharmacyDashboard";
+import { InventoryPage } from "../features/pharmacies/pages/InventoryPage";
+import { OrderReviewPage } from "../features/pharmacies/pages/OrderReviewPage";
 import { useAuthStore } from "../stores/auth.store";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -262,7 +265,23 @@ export function AppRoutes() {
           path="/pharmacy/dashboard"
           element={
             <ProtectedRoute allowedRoles={["PHARMACY"]}>
-              <RoleDashboardPlaceholder role="PHARMACY" />
+              <PharmacyDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/pharmacy/inventory"
+          element={
+            <ProtectedRoute allowedRoles={["PHARMACY"]}>
+              <InventoryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/pharmacy/orders"
+          element={
+            <ProtectedRoute allowedRoles={["PHARMACY"]}>
+              <OrderReviewPage />
             </ProtectedRoute>
           }
         />
@@ -270,7 +289,7 @@ export function AppRoutes() {
           path="/pharmacy/*"
           element={
             <ProtectedRoute allowedRoles={["PHARMACY"]}>
-              <RoleDashboardPlaceholder role="PHARMACY" />
+              <PharmacyDashboard />
             </ProtectedRoute>
           }
         />
