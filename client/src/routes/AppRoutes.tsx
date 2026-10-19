@@ -14,12 +14,13 @@ import { DoctorAppointmentsPage } from "../features/doctors/pages/DoctorAppointm
 import { PharmacyDashboard } from "../features/pharmacies/pages/PharmacyDashboard";
 import { InventoryPage } from "../features/pharmacies/pages/InventoryPage";
 import { OrderReviewPage } from "../features/pharmacies/pages/OrderReviewPage";
+import { AdminDashboard } from "../features/admin/pages/AdminDashboard";
+import { VerificationQueuePage } from "../features/admin/pages/VerificationQueuePage";
+import { ComplaintsPage } from "../features/admin/pages/ComplaintsPage";
+import { AuditLogsPage } from "../features/admin/pages/AuditLogsPage";
 import { useAuthStore } from "../stores/auth.store";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { Badge } from "../components/ui/badge";
-import { Activity, ArrowRight, UserCheck } from "lucide-react";
-import type { UserRole } from "../types/auth";
+import { Activity, ArrowRight } from "lucide-react";
 
 /**
  * Lightweight placeholder for Landing Page in Task 13.1 foundation.
@@ -64,55 +65,6 @@ function LandingPage() {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-
-/**
- * Generic placeholder component for role dashboards.
- */
-function RoleDashboardPlaceholder({ role }: { role: UserRole }) {
-  const { user } = useAuthStore();
-
-  return (
-    <div className="space-y-6" data-testid={`${role.toLowerCase()}-dashboard`}>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-border">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            {role} Workspace
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Welcome back, {user?.fullName || user?.email}. LifeLine {role} portal session active.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Badge
-            variant={role.toLowerCase() as "patient" | "doctor" | "pharmacy" | "admin"}
-            className="uppercase tracking-wider"
-          >
-            {role} Active
-          </Badge>
-          <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 rounded-md border border-emerald-200 dark:border-emerald-800">
-            <UserCheck className="size-3.5" />
-            Verified
-          </span>
-        </div>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Role Portal Shell Initialized</CardTitle>
-          <CardDescription>
-            Foundation layout, route guard, and in-memory authorization confirmed for {role}.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Business views, data tables, booking wizards, and clinical modules will be populated in upcoming milestone tasks (Tasks 13.3 - 13.7).
-          </p>
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -299,7 +251,31 @@ export function AppRoutes() {
           path="/admin/dashboard"
           element={
             <ProtectedRoute allowedRoles={["ADMIN"]}>
-              <RoleDashboardPlaceholder role="ADMIN" />
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/verifications"
+          element={
+            <ProtectedRoute allowedRoles={["ADMIN"]}>
+              <VerificationQueuePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/complaints"
+          element={
+            <ProtectedRoute allowedRoles={["ADMIN"]}>
+              <ComplaintsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/audit-logs"
+          element={
+            <ProtectedRoute allowedRoles={["ADMIN"]}>
+              <AuditLogsPage />
             </ProtectedRoute>
           }
         />
@@ -307,7 +283,7 @@ export function AppRoutes() {
           path="/admin/*"
           element={
             <ProtectedRoute allowedRoles={["ADMIN"]}>
-              <RoleDashboardPlaceholder role="ADMIN" />
+              <AdminDashboard />
             </ProtectedRoute>
           }
         />

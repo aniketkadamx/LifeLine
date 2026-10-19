@@ -16,6 +16,7 @@ import {
   X,
   Sparkles,
   BarChart3,
+  AlertTriangle,
 } from "lucide-react";
 import { useAuthStore } from "../stores/auth.store";
 import { Button } from "../components/ui/button";
@@ -59,6 +60,7 @@ function getNavigationItemsForRole(role?: UserRole): NavItem[] {
       return [
         { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
         { label: "Provider Verification", href: "/admin/verifications", icon: FileCheck2 },
+        { label: "Dispute Center", href: "/admin/complaints", icon: AlertTriangle },
         { label: "User Directory", href: "/admin/users", icon: Users },
         { label: "Audit Logs", href: "/admin/audit-logs", icon: ShieldCheck },
         { label: "Platform Analytics", href: "/admin/analytics", icon: BarChart3 },
