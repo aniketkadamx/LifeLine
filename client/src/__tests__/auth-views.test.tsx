@@ -435,8 +435,12 @@ describe("Milestone 13 - Task 13.2: Authentication & Onboarding UI", () => {
     });
 
     it("14. each role submits the exact backend-supported payload (confirmPassword omitted)", async () => {
+      let dispatchedUrl = "";
+      let dispatchedMethod = "";
       let dispatchedPayload: any = null;
-      global.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        dispatchedUrl = url;
+        dispatchedMethod = init?.method || "GET";
         dispatchedPayload = JSON.parse(init?.body as string);
         return Promise.resolve({
           ok: true,
@@ -493,6 +497,10 @@ describe("Milestone 13 - Task 13.2: Authentication & Onboarding UI", () => {
       await waitFor(() => {
         expect(screen.getByText("Registration Successful")).toBeDefined();
       });
+
+      // Verify exact URL and HTTP method reached
+      expect(dispatchedUrl).toBe("/api/v1/auth/register");
+      expect(dispatchedMethod).toBe("POST");
 
       // Verify exact backend payload
       expect(dispatchedPayload).toEqual({
@@ -609,6 +617,121 @@ describe("Milestone 13 - Task 13.2: Authentication & Onboarding UI", () => {
       expect(window.sessionStorage.getItem("password")).toBeNull();
       expect(JSON.stringify(window.localStorage)).not.toContain("Password");
       expect(JSON.stringify(window.sessionStorage)).not.toContain("Password");
+    });
+
+    it("18. PATIENT registration flow dispatches to /api/v1/auth/register with PATIENT role payload", async () => {
+      let dispatchedUrl = "";
+      let dispatchedMethod = "";
+      let dispatchedPayload: any = null;
+      global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        dispatchedUrl = url;
+        dispatchedMethod = init?.method || "GET";
+        dispatchedPayload = JSON.parse(init?.body as string);
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            success: true,
+            data: {
+              userId: "usr_pat_created",
+              email: "patient.reg@lifeline.org",
+              role: "PATIENT",
+              status: "PENDING_VERIFICATION",
+            },
+            message: "Registration successful. Please verify your email.",
+          }),
+        });
+      });
+
+      render(
+        <MemoryRouter>
+          <RegisterPage />
+        </MemoryRouter>
+      );
+
+      // Step 1: Default is PATIENT
+      expect(screen.getByTestId("register-step-1")).toBeDefined();
+      fireEvent.click(screen.getByTestId("register-continue-button"));
+
+      // Step 2: Fill Personal Details
+      await waitFor(() => screen.getByLabelText(/full name/i));
+      fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: "Alice Patient" } });
+      fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: "patient.reg@lifeline.org" } });
+      fireEvent.change(screen.getByLabelText(/phone number/i), { target: { value: "+15551234567" } });
+      fireEvent.click(screen.getByTestId("register-continue-button"));
+
+      // Step 3: Fill Password
+      await waitFor(() => screen.getByLabelText(/^password$/i));
+      fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: "PatientPassword123!" } });
+      fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: "PatientPassword123!" } });
+      fireEvent.click(screen.getByTestId("register-continue-button"));
+
+      // Step 4: Submit
+      await waitFor(() => screen.getByTestId("register-submit-button"));
+      fireEvent.click(screen.getByTestId("register-submit-button"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Registration Successful")).toBeDefined();
+      });
+
+      // Verify exact URL and HTTP method reached
+      expect(dispatchedUrl).toBe("/api/v1/auth/register");
+      expect(dispatchedMethod).toBe("POST");
+
+      // Verify exact backend payload
+      expect(dispatchedPayload).toEqual({
+        email: "patient.reg@lifeline.org",
+        password: "PatientPassword123!",
+        role: "PATIENT",
+        fullName: "Alice Patient",
+        phone: "+15551234567",
+      });
+    });
+
+    it("19. registration handles 404 endpoint failure gracefully and displays registration failure alert", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({
+          success: false,
+          error: {
+            code: "NOT_FOUND",
+            message: "Route POST /api/v1/auth/register not found on server",
+          },
+        }),
+      });
+
+      render(
+        <MemoryRouter>
+          <RegisterPage />
+        </MemoryRouter>
+      );
+
+      // Advance through steps
+      fireEvent.click(screen.getByTestId("register-continue-button"));
+
+      await waitFor(() => screen.getByLabelText(/full name/i));
+      fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: "John Doe" } });
+      fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: "john.doe@lifeline.org" } });
+      fireEvent.change(screen.getByLabelText(/phone number/i), { target: { value: "+15550001111" } });
+      fireEvent.click(screen.getByTestId("register-continue-button"));
+
+      await waitFor(() => screen.getByLabelText(/^password$/i));
+      fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: "Password123!" } });
+      fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: "Password123!" } });
+      fireEvent.click(screen.getByTestId("register-continue-button"));
+
+      await waitFor(() => screen.getByTestId("register-submit-button"));
+      fireEvent.click(screen.getByTestId("register-submit-button"));
+
+      await waitFor(() => {
+        const errorAlert = screen.getByTestId("register-api-error");
+        expect(errorAlert).toBeDefined();
+        expect(errorAlert.textContent).toContain("Route POST /api/v1/auth/register not found on server");
+      });
     });
   });
 });

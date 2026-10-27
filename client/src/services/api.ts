@@ -20,7 +20,10 @@ export interface RequestOptions extends RequestInit {
   _retry?: boolean;
 }
 
-export const API_BASE_URL = "/api/v1";
+export const API_BASE_URL =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL
+    ? String(import.meta.env.VITE_API_URL).replace(/\/+$/, "")
+    : "") || "/api/v1";
 
 /**
  * Shared in-flight refresh promise to prevent duplicate concurrent refresh requests.
@@ -62,8 +65,17 @@ function handleAuthFailure(): void {
 function resolveUrl(endpoint: string, params?: RequestOptions["params"]): string {
   let url = endpoint;
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    if (!url.startsWith(API_BASE_URL)) {
-      url = `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+    if (API_BASE_URL.startsWith("http://") || API_BASE_URL.startsWith("https://")) {
+      const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+      if (cleanEndpoint.startsWith("/api/v1")) {
+        url = `${API_BASE_URL}${cleanEndpoint.slice(7)}`;
+      } else {
+        url = `${API_BASE_URL}${cleanEndpoint}`;
+      }
+    } else {
+      if (!url.startsWith(API_BASE_URL)) {
+        url = `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+      }
     }
   }
 
@@ -98,7 +110,7 @@ export async function silentRefreshToken(): Promise<string | null> {
 
   refreshPromise = (async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/refresh-token`, {
+      const res = await fetch(resolveUrl("/auth/refresh-token"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
